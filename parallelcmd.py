@@ -48,14 +48,12 @@ def execute(verbose=False, dryrun=False):
     ## check in
     hostname = socket.gethostname()
     workerid = threading.get_native_id()
-    starttime = time.time()
-    with active.get_lock():
-        active.value += 1
 
     while True:
         nomorejob = False
         with sqlite3.connect("pardb.sqlite") as con:
             while True:
+                con.execute("BEGIN EXCLUSIVE")
                 cur = con.cursor()
                 cur.execute(
                     f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL LIMIT 1;"
@@ -70,14 +68,14 @@ def execute(verbose=False, dryrun=False):
                     taskid,
                     cmd,
                 ) = row
-                print("taskid, cmd:", taskid, cmd)
-                accepted = cur.execute(
-                    f"UPDATE parjob SET Exitval = -100 WHERE Seq = {taskid};"
-                )
-                if not accepted:
-                    continue
-                else:
+                cur.execute(f"UPDATE parjob SET Exitval = -100 WHERE Seq = {taskid};")
+                print("taskid, cmd, accepted:", taskid, cmd, cur.rowcount)
+                if cur.rowcount == 1:
+                    con.commit()
                     break
+                else:
+                    print("Retry")
+                    continue
 
         if nomorejob:
             break
@@ -87,6 +85,10 @@ def execute(verbose=False, dryrun=False):
             print("%d: cmd:" % taskid, bashcmd)
 
         if not dryrun:
+            starttime = time.time()
+            with active.get_lock():
+                active.value += 1
+
             p = subprocess.Popen(
                 bashcmd,
                 stdout=subprocess.PIPE,
@@ -151,14 +153,15 @@ def cmdlist(argv):
     return cmds
 
 
-def progress(args):
-    extra = 1 if args.progress else 0
-    done = 0
+def progress(done, total, latest_line=False, progress=False):
+    extra = 1 if progress else 0
     while True:
         workerid, taskid, line = mq.get()
+        if workerid is None:
+            break
 
         if line is not None:
-            if args.latest_line:
+            if latest_line:
                 os.system("tput ll")
                 print("\r", end="", flush=True)
                 os.system("tput sc")
@@ -170,16 +173,16 @@ def progress(args):
             else:
                 print("%d:" % taskid, line, end="", flush=True)
 
-            if args.progress:
+            if progress:
                 os.system("tput ll")
                 print("\r", end="", flush=True)
                 print(
-                    "Processing/Done/Total/Completed(%%): %d/%d/%d/%.02f"
-                    % (active.value, done, total, float(done) / total),
+                    "Processing/Done/Total/Completed(%%): %d/%d/%d/%.01f"
+                    % (active.value, done, total, float(done) / total * 100),
                     end="",
                     flush=True,
                 )
-                if not args.latest_line:
+                if not latest_line:
                     print("")
                 os.system("tput el")
         else:
@@ -281,7 +284,26 @@ if __name__ == "__main__":
 
         sys.exit(0)
 
-    p = threading.Thread(target=progress, args=(args,))
+    with sqlite3.connect("pardb.sqlite") as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT count(1), sum(case when Exitval is not NULL then 1 else 0 end) FROM parjob;"
+        )
+        row = cur.fetchone()
+        (
+            total,
+            done,
+        ) = row
+
+    p = threading.Thread(
+        target=progress,
+        args=(
+            done,
+            total,
+            args.latest_line,
+            args.progress,
+        ),
+    )
     p.start()
 
     env = os.environ.copy()
@@ -360,5 +382,8 @@ if __name__ == "__main__":
 
         for future in future_list:
             future.result()
+
+        mq.put((None, None, None))
+        p.join()
 
     sys.exit(0)
