@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os
 import time
 import socket
@@ -22,7 +24,7 @@ mq = queue.Queue()
 slot = dict()
 active_ps = dict()
 active = mp.Value("i", 0)
-
+dbfile = "pardb.sqlite"
 
 def log(*args, sep=" "):
     logging.debug(sep.join(map(str, args)))
@@ -51,7 +53,7 @@ def execute(verbose=False, dryrun=False):
 
     while True:
         nomorejob = False
-        with sqlite3.connect("pardb.sqlite") as con:
+        with sqlite3.connect(dbfile) as con:
             while True:
                 con.execute("BEGIN EXCLUSIVE")
                 cur = con.cursor()
@@ -95,6 +97,7 @@ def execute(verbose=False, dryrun=False):
                 stderr=subprocess.STDOUT,
                 text=True,
                 shell=True,
+                env=os.environ.copy(),
             )
             with active.get_lock():
                 active_ps[workerid] = p
@@ -113,7 +116,7 @@ def execute(verbose=False, dryrun=False):
             if verbose:
                 print("%d: Done:" % taskid, p.returncode)
 
-            with sqlite3.connect("pardb.sqlite") as con:
+            with sqlite3.connect(dbfile) as con:
                 cur = con.cursor()
                 cur.execute(
                     f"UPDATE parjob SET Exitval = {p.returncode}, JobRuntime = {runtime} WHERE Seq = {taskid};"
@@ -192,7 +195,7 @@ def progress(done, total, latest_line=False, progress=False):
 if __name__ == "__main__":
 
     def usage():
-        print("USAGE: stagerun.py <OPTIONS> [ ::: <ARGUMENTS> ]* [ :::: ARGFILE ]*")
+        print("USAGE: %s <OPTIONS> [ ::: <ARGUMENTS> ]* [ :::: ARGFILE ]*" % (sys.argv[0]))
         parser_main.print_help()
         # parser_args.print_help()
         sys.exit()
@@ -246,7 +249,7 @@ if __name__ == "__main__":
         task_list.append((i, fullcmd))
 
     if args.sqlmaster:
-        with sqlite3.connect("pardb.sqlite") as con:
+        with sqlite3.connect(dbfile) as con:
             cur = con.cursor()
             try:
                 sql = "DROP TABLE parjob;"
@@ -284,7 +287,7 @@ if __name__ == "__main__":
 
         sys.exit(0)
 
-    with sqlite3.connect("pardb.sqlite") as con:
+    with sqlite3.connect(dbfile) as con:
         cur = con.cursor()
         cur.execute(
             "SELECT count(1), sum(case when Exitval is not NULL then 1 else 0 end) FROM parjob;"
@@ -318,67 +321,6 @@ if __name__ == "__main__":
         for index in range(args.nworkers):
             future = executor.submit(execute, verbose=args.verbose, dryrun=args.dryrun)
             future_list.append(future)
-
-        # done = 0
-        # with sqlite3.connect("pardb.sqlite") as con:
-        #     cur = con.cursor()
-        #     cur.execute(
-        #         f"SELECT count(*) FROM parjob WHERE Exitval is NULL;"
-        #     )
-        #     row = cur.fetchone()
-        #     total, = row
-        # print ("total: ", total)
-
-        # extra = 1 if args.progress else 0
-
-        # while done < total:
-        #     try:
-        #         print ("mq.get ...")
-        #         workerid, taskid, line = mq.get()
-        #         # mq.task_done()
-
-        #         if line is not None:
-        #             if args.latest_line:
-        #                 os.system("tput ll")
-        #                 print("\r", end="", flush=True)
-        #                 os.system("tput sc")
-        #                 for i in range(slot[workerid] + extra):
-        #                     os.system("tput cuu1")
-        #                 print("%d:" % taskid, line.rstrip(), end="", flush=True)
-        #                 os.system("tput el")
-        #                 os.system("tput rc")
-        #             else:
-        #                 print("%d:" % taskid, line, end="", flush=True)
-
-        #             if args.progress:
-        #                 os.system("tput ll")
-        #                 print("\r", end="", flush=True)
-        #                 print(
-        #                     "Processing/Done/Total/Completed(%%): %d/%d/%d/%.02f"
-        #                     % (active.value, done, total, float(done) / total),
-        #                     end="",
-        #                     flush=True,
-        #                 )
-        #                 if not args.latest_line:
-        #                     print("")
-        #                 os.system("tput el")
-        #         else:
-        #             done += 1
-
-        #         with sqlite3.connect("pardb.sqlite") as con:
-        #             cur = con.cursor()
-        #             cur.execute(
-        #                 f"SELECT count(*) FROM parjob WHERE Exitval is NULL;"
-        #             )
-        #             row = cur.fetchone()
-        #             total, = row
-
-        #         print ("total: ", total)
-
-        #     except KeyboardInterrupt:
-        #         log("You typed CTRL + C, which is the keyboard interrupt exception")
-        #         for k in active_ps:
-        #             active_ps[k].send_signal(signal.SIGTERM)
 
         for future in future_list:
             future.result()
