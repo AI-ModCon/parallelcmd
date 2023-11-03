@@ -15,6 +15,8 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import itertools
 from string import Formatter
+import sqlite3
+import socket
 
 mq = queue.Queue()
 slot = dict()
@@ -42,36 +44,81 @@ def foo(n):
     return n
 
 
-def execute(taskid, cmd, verbose=False):
+def execute(verbose=False, dryrun=False):
     ## check in
+    hostname = socket.gethostname()
     workerid = threading.get_native_id()
+    starttime = time.time()
     with active.get_lock():
         active.value += 1
 
-    bashcmd = "bash -c '%s'" % cmd
-    if verbose:
-        print("%d:" % taskid, bashcmd)
-    p = subprocess.Popen(
-        bashcmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=True
-    )
-    with active.get_lock():
-        active_ps[workerid] = p
+    while True:
+        nomorejob = False
+        with sqlite3.connect("pardb.sqlite") as con:
+            while True:
+                cur = con.cursor()
+                cur.execute(
+                    f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL LIMIT 1;"
+                )
+                row = cur.fetchone()
+                if not row:
+                    print("No more job")
+                    nomorejob = True
+                    break
 
-    for line in iter(p.stdout.readline, ""):
-        mq.put((workerid, taskid, line))
+                (
+                    taskid,
+                    cmd,
+                ) = row
+                print("taskid, cmd:", taskid, cmd)
+                accepted = cur.execute(
+                    f"UPDATE parjob SET Exitval = -100 WHERE Seq = {taskid};"
+                )
+                if not accepted:
+                    continue
+                else:
+                    break
 
-    p.wait()
-    ## check out
-    mq.put((workerid, taskid, None))
-    with active.get_lock():
-        active.value -= 1
-        del active_ps[workerid]
-    return p.returncode
+        if nomorejob:
+            break
 
+        bashcmd = "bash -c '%s'" % cmd
+        if verbose:
+            print("%d: cmd:" % taskid, bashcmd)
 
-def submit(executor, task_list, verbose=False):
-    for task in task_list:
-        executor.submit(execute, *task, verbose=verbose)
+        if not dryrun:
+            p = subprocess.Popen(
+                bashcmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                shell=True,
+            )
+            with active.get_lock():
+                active_ps[workerid] = p
+
+            for line in iter(p.stdout.readline, ""):
+                mq.put((workerid, taskid, line))
+
+            p.wait()
+            ## check out
+            mq.put((workerid, taskid, None))
+            with active.get_lock():
+                active.value -= 1
+                del active_ps[workerid]
+
+            runtime = time.time() - starttime
+            if verbose:
+                print("%d: Done:" % taskid, p.returncode)
+
+            with sqlite3.connect("pardb.sqlite") as con:
+                cur = con.cursor()
+                cur.execute(
+                    f"UPDATE parjob SET Exitval = {p.returncode}, JobRuntime = {runtime} WHERE Seq = {taskid};"
+                )
+                con.commit()
+
+    return 0
 
 
 def cmdlist(argv):
@@ -104,6 +151,41 @@ def cmdlist(argv):
     return cmds
 
 
+def progress(args):
+    extra = 1 if args.progress else 0
+    done = 0
+    while True:
+        workerid, taskid, line = mq.get()
+
+        if line is not None:
+            if args.latest_line:
+                os.system("tput ll")
+                print("\r", end="", flush=True)
+                os.system("tput sc")
+                for i in range(slot[workerid] + extra):
+                    os.system("tput cuu1")
+                print("%d:" % taskid, line.rstrip(), end="", flush=True)
+                os.system("tput el")
+                os.system("tput rc")
+            else:
+                print("%d:" % taskid, line, end="", flush=True)
+
+            if args.progress:
+                os.system("tput ll")
+                print("\r", end="", flush=True)
+                print(
+                    "Processing/Done/Total/Completed(%%): %d/%d/%d/%.02f"
+                    % (active.value, done, total, float(done) / total),
+                    end="",
+                    flush=True,
+                )
+                if not args.latest_line:
+                    print("")
+                os.system("tput el")
+        else:
+            done += 1
+
+
 if __name__ == "__main__":
 
     def usage():
@@ -121,17 +203,22 @@ if __name__ == "__main__":
     parser_main.add_argument(
         "--latest-line", action="store_true", help="print only last line"
     )
+    parser_main.add_argument("--sqlmaster", action="store_true", help="sqlmater")
+    parser_main.add_argument("--sqlworker", action="store_true", help="sqlworker")
+    parser_main.add_argument("--dryrun", action="store_true", help="dryrun")
     parser_main.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
 
     parser_args = argparse.ArgumentParser(prog="ARGUMENTS", add_help=False)
     parser_args.add_argument("args", help="arguments", nargs=argparse.REMAINDER)
 
     cmds = cmdlist(sys.argv[1:])
-    if len(cmds) < 2:
-        usage()
 
     args, _unknown = parser_main.parse_known_args(cmds[0])
     if len(_unknown) > 0:
+        print("Unknown options:", _unknown)
+        usage()
+
+    if (not args.sqlworker) and (len(cmds) < 2):
         usage()
 
     args_cmd_list = list()
@@ -142,6 +229,61 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 
+    args_list = cmds[1:]
+
+    cmd = " ".join(args.cmd)
+    ## check if cmd has valid formatter
+    valid = any(a is not None or b is not None for _, a, b, _ in Formatter().parse(cmd))
+    if not valid:
+        cmd += " {}" * len(args_list)
+
+    task_list = list()
+    for i, argpair in enumerate(itertools.product(*args_list)):
+        fullcmd = cmd.format(*argpair)
+        task_list.append((i, fullcmd))
+
+    if args.sqlmaster:
+        with sqlite3.connect("pardb.sqlite") as con:
+            cur = con.cursor()
+            try:
+                sql = "DROP TABLE parjob;"
+                cur.execute(sql)
+            except:
+                pass
+
+            sql = (
+                "CREATE TABLE parjob "
+                "(Seq BIGINT,"
+                " Host TEXT,"
+                " Starttime FLOAT(44),"
+                " JobRuntime FLOAT(44),"
+                " Send BIGINT,"
+                " Receive BIGINT,"
+                " Exitval BIGINT,"
+                " _Signal BIGINT,"
+                " Command TEXT,"
+                " V1 TEXT,"
+                " Stdout TEXT,"
+                " Stderr TEXT);"
+            )
+            cur.execute(sql)
+
+            for i, cmd in task_list:
+                sql = "INSERT INTO parjob (Seq,Command) VALUES (%d, '%s');" % (
+                    i,
+                    cmd,
+                )
+                cur.execute(sql)
+            con.commit()
+            res = cur.execute("select count(*) from parjob;")
+            (ntotal,) = res.fetchone()
+            print("pardb.sqlite created. %d tasks added." % (ntotal))
+
+        sys.exit(0)
+
+    p = threading.Thread(target=progress, args=(args,))
+    p.start()
+
     env = os.environ.copy()
     counter = mp.Value("i", 0)
     # pool = ProcessPoolExecutor(max_workers=args.nworkers, initializer=hello, initargs=(counter,))
@@ -150,63 +292,73 @@ if __name__ == "__main__":
     )
 
     with pool as executor:
-        args_list = cmds[1:]
+        future_list = list()
+        for index in range(args.nworkers):
+            future = executor.submit(execute, verbose=args.verbose, dryrun=args.dryrun)
+            future_list.append(future)
 
-        cmd = " ".join(args.cmd)
-        ## check if cmd has valid formatter
-        valid = any(
-            a is not None or b is not None for _, a, b, _ in Formatter().parse(cmd)
-        )
-        if not valid:
-            cmd += " {}" * len(args_list)
-        log("cmd:", cmd)
+        # done = 0
+        # with sqlite3.connect("pardb.sqlite") as con:
+        #     cur = con.cursor()
+        #     cur.execute(
+        #         f"SELECT count(*) FROM parjob WHERE Exitval is NULL;"
+        #     )
+        #     row = cur.fetchone()
+        #     total, = row
+        # print ("total: ", total)
 
-        task_list = list()
-        for i, argpair in enumerate(itertools.product(*args_list)):
-            fullcmd = cmd.format(*argpair)
-            task_list.append((i, fullcmd))
+        # extra = 1 if args.progress else 0
 
-        thread = Thread(target=submit, args=(executor, task_list, args.verbose)).start()
+        # while done < total:
+        #     try:
+        #         print ("mq.get ...")
+        #         workerid, taskid, line = mq.get()
+        #         # mq.task_done()
 
-        done = 0
-        total = len(task_list)
-        extra = 0
-        if args.progress:
-            extra += 1
-        while done < total:
-            try:
-                workerid, taskid, line = mq.get()
-                mq.task_done()
+        #         if line is not None:
+        #             if args.latest_line:
+        #                 os.system("tput ll")
+        #                 print("\r", end="", flush=True)
+        #                 os.system("tput sc")
+        #                 for i in range(slot[workerid] + extra):
+        #                     os.system("tput cuu1")
+        #                 print("%d:" % taskid, line.rstrip(), end="", flush=True)
+        #                 os.system("tput el")
+        #                 os.system("tput rc")
+        #             else:
+        #                 print("%d:" % taskid, line, end="", flush=True)
 
-                if line is not None:
-                    if args.latest_line:
-                        os.system("tput ll")
-                        print("\r", end="", flush=True)
-                        os.system("tput sc")
-                        for i in range(slot[workerid] + extra):
-                            os.system("tput cuu1")
-                        print("%d:" % taskid, line.rstrip(), end="", flush=True)
-                        os.system("tput el")
-                        os.system("tput rc")
-                    else:
-                        print("%d:" % taskid, line, end="", flush=True)
+        #             if args.progress:
+        #                 os.system("tput ll")
+        #                 print("\r", end="", flush=True)
+        #                 print(
+        #                     "Processing/Done/Total/Completed(%%): %d/%d/%d/%.02f"
+        #                     % (active.value, done, total, float(done) / total),
+        #                     end="",
+        #                     flush=True,
+        #                 )
+        #                 if not args.latest_line:
+        #                     print("")
+        #                 os.system("tput el")
+        #         else:
+        #             done += 1
 
-                    if args.progress:
-                        os.system("tput ll")
-                        print("\r", end="", flush=True)
-                        print(
-                            "Processing/Done/Total/Completed(%%): %d/%d/%d/%.02f"
-                            % (active.value, done, total, float(done) / total),
-                            end="",
-                            flush=True,
-                        )
-                        if not args.latest_line:
-                            print("")
-                        os.system("tput el")
-                else:
-                    done += 1
-            except KeyboardInterrupt:
-                log("You typed CTRL + C, which is the keyboard interrupt exception")
-                for k in active_ps:
-                    active_ps[k].send_signal(signal.SIGTERM)
+        #         with sqlite3.connect("pardb.sqlite") as con:
+        #             cur = con.cursor()
+        #             cur.execute(
+        #                 f"SELECT count(*) FROM parjob WHERE Exitval is NULL;"
+        #             )
+        #             row = cur.fetchone()
+        #             total, = row
+
+        #         print ("total: ", total)
+
+        #     except KeyboardInterrupt:
+        #         log("You typed CTRL + C, which is the keyboard interrupt exception")
+        #         for k in active_ps:
+        #             active_ps[k].send_signal(signal.SIGTERM)
+
+        for future in future_list:
+            future.result()
+
     sys.exit(0)
