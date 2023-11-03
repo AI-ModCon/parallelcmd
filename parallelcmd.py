@@ -26,6 +26,7 @@ active_ps = dict()
 active = mp.Value("i", 0)
 dbfile = "pardb.sqlite"
 
+
 def log(*args, sep=" "):
     logging.debug(sep.join(map(str, args)))
 
@@ -164,6 +165,7 @@ def progress(done, total, latest_line=False, progress=False):
             break
 
         if line is not None:
+            t0 = time.time()
             if latest_line:
                 os.system("tput ll")
                 print("\r", end="", flush=True)
@@ -180,8 +182,14 @@ def progress(done, total, latest_line=False, progress=False):
                 os.system("tput ll")
                 print("\r", end="", flush=True)
                 print(
-                    "Processing/Done/Total/Completed(%%): %d/%d/%d/%.01f"
-                    % (active.value, done, total, float(done) / total * 100),
+                    "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f(%%)/%.01f(sec)"
+                    % (
+                        active.value,
+                        done,
+                        total,
+                        float(done) / total * 100,
+                        time.time() - t0,
+                    ),
                     end="",
                     flush=True,
                 )
@@ -195,7 +203,9 @@ def progress(done, total, latest_line=False, progress=False):
 if __name__ == "__main__":
 
     def usage():
-        print("USAGE: %s <OPTIONS> [ ::: <ARGUMENTS> ]* [ :::: ARGFILE ]*" % (sys.argv[0]))
+        print(
+            "USAGE: %s <OPTIONS> [ ::: <ARGUMENTS> ]* [ :::: ARGFILE ]*" % (sys.argv[0])
+        )
         parser_main.print_help()
         # parser_args.print_help()
         sys.exit()
@@ -212,6 +222,7 @@ if __name__ == "__main__":
     parser_main.add_argument("--sqlmaster", action="store_true", help="sqlmater")
     parser_main.add_argument("--sqlworker", action="store_true", help="sqlworker")
     parser_main.add_argument("--dryrun", action="store_true", help="dryrun")
+    parser_main.add_argument("--dbfile", help="dbfile", default="pardb.sqlite")
     parser_main.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
 
     parser_args = argparse.ArgumentParser(prog="ARGUMENTS", add_help=False)
@@ -247,6 +258,8 @@ if __name__ == "__main__":
     for i, argpair in enumerate(itertools.product(*args_list)):
         fullcmd = cmd.format(*argpair)
         task_list.append((i, fullcmd))
+
+    dbfile = args.dbfile
 
     if args.sqlmaster:
         with sqlite3.connect(dbfile) as con:
