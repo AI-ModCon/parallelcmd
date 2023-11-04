@@ -67,7 +67,7 @@ def execute(verbose=False, dryrun=False):
                         cmd,
                     ) = row
                     cur.execute(
-                        f"UPDATE parjob SET Exitval = -100 WHERE Seq = {taskid};"
+                        f"UPDATE parjob SET Exitval = -1000 WHERE Seq = {taskid};"
                     )
                     log(slot[workerid], "taskid, cmd:", taskid, cmd)
                     assert cur.rowcount == 1
@@ -211,55 +211,54 @@ def progress(done, total, latest_line=False, progress=False):
             total, done = jobcount()
 
 
-if __name__ == "__main__":
+def checkdb(args):
+    with sqlite3.connect(dbfile) as con:
+        # con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        # cur.execute("SELECT count(1) as Total, sum(case when Exitval == 0 then 1 else 0 end) as Finished FROM parjob")
+        if args.list:
+            cur.execute("SELECT Seq, Exitval, Command FROM parjob")
+            rows = cur.fetchall()
+            format = " {:>4} {:>7} {:<80}"
+            colnames = [desc[0] for desc in cur.description]
+            bars = ["-" * len(desc[0]) for desc in cur.description]
+            print(format.format(*colnames))
+            print(format.format(*bars))
+            for row in rows:
+                print(format.format(*map(lambda x: str(x), row)))
+        else:
+            cur.execute(
+                "SELECT count(1) as Total, "
+                "sum(case when Exitval == -1000 then 1 else 0 end) as Processing, "
+                "sum(case when Exitval == 0 then 1 else 0 end) as Finished "
+                "FROM parjob"
+            )
+            row = cur.fetchone()
+            format = " {:>5} {:>10} {:>8}"
+            colnames = [desc[0] for desc in cur.description]
+            bars = ["-" * len(desc[0]) for desc in cur.description]
+            print(format.format(*colnames))
+            print(format.format(*bars))
+            print(format.format(*map(lambda x: str(x), row)))
 
-    def usage():
-        print(
-            "USAGE: %s <OPTIONS> [ ::: <ARGUMENTS> ]* [ :::: ARGFILE ]*" % (sys.argv[0])
-        )
-        parser_main.print_help()
-        # parser_args.print_help()
-        sys.exit()
 
-    parser_main = argparse.ArgumentParser(prog="OPTIONS", add_help=False)
-    parser_main.add_argument(
-        "-j", "--nworkers", type=int, help="Number of workers", default=4
-    )
-    parser_main.add_argument("--progress", action="store_true", help="print progress")
-    parser_main.add_argument("-v", "--verbose", action="store_true", help="verbose")
-    parser_main.add_argument(
-        "--latest-line", action="store_true", help="print only last line"
-    )
-    parser_main.add_argument("--sqlmaster", action="store_true", help="sqlmater")
-    parser_main.add_argument("--sqlworker", action="store_true", help="sqlworker")
-    parser_main.add_argument("--dryrun", action="store_true", help="dryrun")
-    parser_main.add_argument("--dbfile", help="dbfile", default="pardb.sqlite")
-    parser_main.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
+def resetdb(args):
+    with sqlite3.connect(dbfile) as con:
+        cur = con.cursor()
+        cur.execute("SELECT count(*) FROM parjob WHERE Exitval <> 0;")
+        (count,) = cur.fetchone()
+        ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
+        if ans == "Y" or ans == "y":
+            cur.execute("UPDATE parjob SET Exitval = NULL WHERE Exitval <> 0;")
+            print("Rset:", cur.rowcount)
+            con.commit()
+        else:
+            print("Aborted.")
 
-    parser_args = argparse.ArgumentParser(prog="ARGUMENTS", add_help=False)
-    parser_args.add_argument("args", help="arguments", nargs=argparse.REMAINDER)
 
+def initdb(args):
     cmds = cmdlist(sys.argv[1:])
-
-    args, _unknown = parser_main.parse_known_args(cmds[0])
-    if len(_unknown) > 0:
-        print("Unknown options:", _unknown)
-        usage()
-
-    if (not args.sqlworker) and (len(cmds) < 2):
-        usage()
-
-    args_cmd_list = list()
-    for cmd in cmds[1:]:
-        args_cmd, _unknown = parser_args.parse_known_args(cmd)
-        if len(_unknown) > 0:
-            usage()
-
-    level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
-
     args_list = cmds[1:]
-
     cmd = " ".join(args.cmd)
     ## check if cmd has valid formatter
     valid = any(a is not None or b is not None for _, a, b, _ in Formatter().parse(cmd))
@@ -273,47 +272,46 @@ if __name__ == "__main__":
 
     dbfile = args.dbfile
 
-    if args.sqlmaster:
-        with sqlite3.connect(dbfile) as con:
-            cur = con.cursor()
-            try:
-                sql = "DROP TABLE parjob;"
-                cur.execute(sql)
-            except:
-                pass
+    with sqlite3.connect(dbfile) as con:
+        cur = con.cursor()
+        try:
+            sql = "DROP TABLE parjob;"
+            cur.execute(sql)
+        except:
+            pass
 
-            sql = (
-                "CREATE TABLE parjob "
-                "(Seq BIGINT,"
-                " Host TEXT,"
-                " Starttime FLOAT(44),"
-                " JobRuntime FLOAT(44),"
-                " Send BIGINT,"
-                " Receive BIGINT,"
-                " Exitval BIGINT,"
-                " _Signal BIGINT,"
-                " Command TEXT,"
-                " V1 TEXT,"
-                " Stdout TEXT,"
-                " Stderr TEXT);"
+        sql = (
+            "CREATE TABLE parjob "
+            "(Seq BIGINT,"
+            " Host TEXT,"
+            " Starttime FLOAT(44),"
+            " JobRuntime FLOAT(44),"
+            " Send BIGINT,"
+            " Receive BIGINT,"
+            " Exitval BIGINT,"
+            " _Signal BIGINT,"
+            " Command TEXT,"
+            " V1 TEXT,"
+            " Stdout TEXT,"
+            " Stderr TEXT);"
+        )
+        cur.execute(sql)
+
+        for i, cmd in task_list:
+            sql = "INSERT INTO parjob (Seq,Command) VALUES (%d, '%s');" % (
+                i,
+                cmd,
             )
             cur.execute(sql)
+        con.commit()
+        res = cur.execute("select count(*) from parjob;")
+        (ntotal,) = res.fetchone()
+        print("%s created" % (dbfile))
+        print("%d tasks added." % (ntotal))
 
-            for i, cmd in task_list:
-                sql = "INSERT INTO parjob (Seq,Command) VALUES (%d, '%s');" % (
-                    i,
-                    cmd,
-                )
-                cur.execute(sql)
-            con.commit()
-            res = cur.execute("select count(*) from parjob;")
-            (ntotal,) = res.fetchone()
-            print("pardb.sqlite created. %d tasks added." % (ntotal))
 
-        sys.exit(0)
-
+def main(args):
     total, done = jobcount()
-
     p = threading.Thread(
         target=progress,
         args=(
@@ -344,4 +342,70 @@ if __name__ == "__main__":
         mq.put((None, None, None))
         p.join()
 
+
+if __name__ == "__main__":
+
+    def usage():
+        # print(
+        #     "USAGE: %s <OPTIONS> [ ::: <ARGUMENTS> ]* [ :::: ARGFILE ]*" % (sys.argv[0])
+        # )
+        parser_main.print_help()
+        # parser_args.print_help()
+        sys.exit()
+
+    parser_main = argparse.ArgumentParser(prog="OPTIONS", add_help=False)
+    parser_main.add_argument("--dbfile", help="dbfile", default="pardb.sqlite")
+    parser_main.add_argument("-v", "--verbose", action="store_true", help="verbose")
+
+    subparsers = parser_main.add_subparsers(
+        title="subcommands", description="valid subcommands", dest="command"
+    )
+
+    ## subcommand: check
+    parser = subparsers.add_parser("check")
+    parser.add_argument("-l", "--list", action="store_true", help="list")
+    parser.set_defaults(func=checkdb)
+
+    ## subcommand: reset
+    parser = subparsers.add_parser("reset")
+    parser.set_defaults(func=resetdb)
+
+    ## subcommand: init
+    parser = subparsers.add_parser("init")
+    parser.set_defaults(func=initdb)
+    parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
+
+    ## subcommand: exec
+    parser = subparsers.add_parser("exec")
+    parser.set_defaults(func=main)
+    parser.add_argument(
+        "-j", "--nworkers", type=int, help="Number of workers", default=4
+    )
+    parser.add_argument("--progress", action="store_true", help="print progress")
+    parser.add_argument(
+        "--latest-line", action="store_true", help="print only last line"
+    )
+    parser.add_argument("--dryrun", action="store_true", help="dryrun")
+    parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
+
+    parser_args = argparse.ArgumentParser(prog="ARGUMENTS", add_help=False)
+    parser_args.add_argument("args", help="arguments", nargs=argparse.REMAINDER)
+
+    cmds = cmdlist(sys.argv[1:])
+    args, _unknown = parser_main.parse_known_args(cmds[0])
+    if len(_unknown) > 0:
+        print("Unknown options:", _unknown)
+        usage()
+
+    if args.command == "init":
+        args_cmd_list = list()
+        for cmd in cmds[1:]:
+            args_cmd, _unknown = parser_args.parse_known_args(cmd)
+            if len(_unknown) > 0:
+                usage()
+
+    level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+
+    args.func(args)
     sys.exit(0)
