@@ -128,7 +128,7 @@ def jobcount():
     with sqlite3.connect(dbfile) as con:
         cur = con.cursor()
         cur.execute(
-            "SELECT count(1), sum(case when Exitval is not NULL then 1 else 0 end) FROM parjob;"
+            "SELECT count(1), sum(case when Exitval == 0 then 1 else 0 end) FROM parjob;"
         )
         row = cur.fetchone()
         (
