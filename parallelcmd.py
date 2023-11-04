@@ -124,7 +124,7 @@ def execute(verbose=False, dryrun=False):
     return 0
 
 
-def get_count():
+def jobcount():
     with sqlite3.connect(dbfile) as con:
         cur = con.cursor()
         cur.execute(
@@ -208,7 +208,7 @@ def progress(done, total, latest_line=False, progress=False):
                     print("")
                 os.system("tput el")
         else:
-            total, done = get_count()
+            total, done = jobcount()
 
 
 if __name__ == "__main__":
@@ -312,7 +312,7 @@ if __name__ == "__main__":
 
         sys.exit(0)
 
-    total, done = get_count()
+    total, done = jobcount()
 
     p = threading.Thread(
         target=progress,
