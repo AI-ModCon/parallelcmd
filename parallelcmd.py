@@ -41,12 +41,6 @@ def hello(counter: mp.Value):
     return 0
 
 
-def foo(n):
-    print("foo:", n)
-    time.sleep(2)
-    return n
-
-
 def execute(verbose=False, dryrun=False):
     ## check in
     hostname = socket.gethostname()
@@ -56,29 +50,32 @@ def execute(verbose=False, dryrun=False):
         nomorejob = False
         with sqlite3.connect(dbfile) as con:
             while True:
-                con.execute("BEGIN EXCLUSIVE")
-                cur = con.cursor()
-                cur.execute(
-                    f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL LIMIT 1;"
-                )
-                row = cur.fetchone()
-                if not row:
-                    print("No more job")
-                    nomorejob = True
-                    break
+                try:
+                    con.execute("BEGIN EXCLUSIVE")
+                    cur = con.cursor()
+                    cur.execute(
+                        f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL LIMIT 1;"
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        log(slot[workerid], "No more job")
+                        nomorejob = True
+                        break
 
-                (
-                    taskid,
-                    cmd,
-                ) = row
-                cur.execute(f"UPDATE parjob SET Exitval = -100 WHERE Seq = {taskid};")
-                print("taskid, cmd, accepted:", taskid, cmd, cur.rowcount)
-                if cur.rowcount == 1:
+                    (
+                        taskid,
+                        cmd,
+                    ) = row
+                    cur.execute(
+                        f"UPDATE parjob SET Exitval = -100 WHERE Seq = {taskid};"
+                    )
+                    log(slot[workerid], "taskid, cmd:", taskid, cmd)
+                    assert cur.rowcount == 1
                     con.commit()
                     break
-                else:
-                    print("Retry")
-                    continue
+                except Exception as e:
+                    log(slot[workerid], "exception:", e)
+                    pass
 
         if nomorejob:
             break
@@ -244,7 +241,8 @@ if __name__ == "__main__":
         if len(_unknown) > 0:
             usage()
 
-    logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
+    level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
 
     args_list = cmds[1:]
 
