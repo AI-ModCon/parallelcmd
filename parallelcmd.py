@@ -58,7 +58,7 @@ def execute(verbose=False, dryrun=False):
                     )
                     row = cur.fetchone()
                     if not row:
-                        log(slot[workerid], "No more job")
+                        log(f"{slot[workerid]}: No more job")
                         nomorejob = True
                         break
 
@@ -69,12 +69,12 @@ def execute(verbose=False, dryrun=False):
                     cur.execute(
                         f"UPDATE parjob SET Exitval = -1000 WHERE Seq = {taskid};"
                     )
-                    log(slot[workerid], "taskid, cmd:", taskid, cmd)
+                    log(f"{slot[workerid]}: taskid, cmd:", taskid, cmd)
                     assert cur.rowcount == 1
                     con.commit()
                     break
                 except Exception as e:
-                    log(slot[workerid], "exception:", e)
+                    log(f"{slot[workerid]}: Exception:", e)
                     pass
 
         if nomorejob:
