@@ -124,6 +124,20 @@ def execute(verbose=False, dryrun=False):
     return 0
 
 
+def get_count():
+    with sqlite3.connect(dbfile) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT count(1), sum(case when Exitval is not NULL then 1 else 0 end) FROM parjob;"
+        )
+        row = cur.fetchone()
+        (
+            total,
+            done,
+        ) = row
+    return (total, done)
+
+
 def cmdlist(argv):
     """
     return list of list
@@ -179,7 +193,7 @@ def progress(done, total, latest_line=False, progress=False):
                 os.system("tput ll")
                 print("\r", end="", flush=True)
                 print(
-                    "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f%%/%.01fs"
+                    "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f%%/%.02fs"
                     % (
                         active.value,
                         done,
@@ -194,7 +208,7 @@ def progress(done, total, latest_line=False, progress=False):
                     print("")
                 os.system("tput el")
         else:
-            done += 1
+            total, done = get_count()
 
 
 if __name__ == "__main__":
@@ -298,16 +312,7 @@ if __name__ == "__main__":
 
         sys.exit(0)
 
-    with sqlite3.connect(dbfile) as con:
-        cur = con.cursor()
-        cur.execute(
-            "SELECT count(1), sum(case when Exitval is not NULL then 1 else 0 end) FROM parjob;"
-        )
-        row = cur.fetchone()
-        (
-            total,
-            done,
-        ) = row
+    total, done = get_count()
 
     p = threading.Thread(
         target=progress,
