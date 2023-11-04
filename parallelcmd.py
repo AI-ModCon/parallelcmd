@@ -182,7 +182,7 @@ def progress(done, total, latest_line=False, progress=False):
                 os.system("tput ll")
                 print("\r", end="", flush=True)
                 print(
-                    "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f(%%)/%.01f(sec)"
+                    "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f%%/%.01fs"
                     % (
                         active.value,
                         done,
