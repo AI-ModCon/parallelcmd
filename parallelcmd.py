@@ -67,7 +67,7 @@ def execute(verbose=False, dryrun=False):
                         cmd,
                     ) = row
                     cur.execute(
-                        f"UPDATE parjob SET Exitval = -1000 WHERE Seq = {taskid};"
+                        f"UPDATE parjob SET Starttime = unixepoch('now'), Exitval = -1000 WHERE Seq = {taskid};"
                     )
                     log(f"{slot[workerid]}: taskid, cmd:", taskid, cmd)
                     assert cur.rowcount == 1
@@ -217,15 +217,20 @@ def checkdb(args):
         cur = con.cursor()
         # cur.execute("SELECT count(1) as Total, sum(case when Exitval == 0 then 1 else 0 end) as Finished FROM parjob")
         if args.list:
-            cur.execute("SELECT Seq, Exitval, Command FROM parjob")
+            cur.execute(
+                "SELECT Seq, "
+                "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
+                "JobRuntime, Exitval, Command "
+                "FROM parjob"
+            )
             rows = cur.fetchall()
-            format = " {:>4} {:>7} {:<80}"
+            format = " {:>4} {:>19} {:>9} {:>7} {:<80}"
             colnames = [desc[0] for desc in cur.description]
             bars = ["-" * len(desc[0]) for desc in cur.description]
             print(format.format(*colnames))
             print(format.format(*bars))
             for row in rows:
-                print(format.format(*map(lambda x: str(x), row)))
+                print(format.format(*map(lambda x: str(x) if not isinstance(x, float) else "%.2f"%x, row)))
         else:
             cur.execute(
                 "SELECT count(1) as Total, "
