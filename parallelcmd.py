@@ -432,6 +432,7 @@ if __name__ == "__main__":
     level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
 
-    log(sys.version)
+    log("Python version:", ".".join(map(str, sys.version_info[:3])))
+    log("Python info:", sys.version)
     args.func(args)
     sys.exit(0)
