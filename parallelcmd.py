@@ -169,14 +169,36 @@ def cmdlist(argv):
 
 
 def progress(done, total, latest_line=False, progress=False):
+    def putline():
+        os.system("tput ll")
+        print("\r", end="", flush=True)
+        print(
+            "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f%%/%.02fs"
+            % (
+                active.value,
+                done,
+                total,
+                float(done) / total * 100,
+                time.time() - t0,
+            ),
+            end="",
+            flush=True,
+        )
+        if not latest_line:
+            print("")
+        os.system("tput el")
+
     extra = 1 if progress else 0
+    t0 = time.time()
+    t1 = t0
     while True:
         workerid, taskid, line = mq.get()
-        if workerid is None:
+        if (workerid is None) or (done == total):
+            total, done = jobcount()
+            putline()
             break
 
         if line is not None:
-            t0 = time.time()
             if latest_line:
                 os.system("tput ll")
                 print("\r", end="", flush=True)
@@ -190,25 +212,13 @@ def progress(done, total, latest_line=False, progress=False):
                 print("%d:" % taskid, line, end="", flush=True)
 
             if progress:
-                os.system("tput ll")
-                print("\r", end="", flush=True)
-                print(
-                    "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f%%/%.02fs"
-                    % (
-                        active.value,
-                        done,
-                        total,
-                        float(done) / total * 100,
-                        time.time() - t0,
-                    ),
-                    end="",
-                    flush=True,
-                )
-                if not latest_line:
-                    print("")
-                os.system("tput el")
-        else:
-            total, done = jobcount()
+                ## try not too frequent
+                if time.time() - t1 > 1:
+                    total, done = jobcount()
+                    putline()
+                    t1 = time.time()
+                else:
+                    pass
 
 
 def checkdb(args):
@@ -224,13 +234,22 @@ def checkdb(args):
                 "FROM parjob"
             )
             rows = cur.fetchall()
-            format = " {:>4} {:>19} {:>9} {:>7} {:<80}"
+            format = " {:>4} {:<19} {:>9} {:>7} {:<80}"
             colnames = [desc[0] for desc in cur.description]
             bars = ["-" * len(desc[0]) for desc in cur.description]
             print(format.format(*colnames))
             print(format.format(*bars))
             for row in rows:
-                print(format.format(*map(lambda x: str(x) if not isinstance(x, float) else "%.2f"%x, row)))
+                print(
+                    format.format(
+                        *map(
+                            lambda x: str(x)
+                            if not isinstance(x, float)
+                            else "%.2f" % x,
+                            row,
+                        )
+                    )
+                )
         else:
             cur.execute(
                 "SELECT count(1) as Total, "
@@ -379,6 +398,7 @@ if __name__ == "__main__":
     parser = subparsers.add_parser("init")
     parser.set_defaults(func=initdb)
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
+    parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
 
     ## subcommand: exec
     parser = subparsers.add_parser("exec")
@@ -412,5 +432,6 @@ if __name__ == "__main__":
     level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
 
+    log(sys.version)
     args.func(args)
     sys.exit(0)
