@@ -19,6 +19,7 @@ import itertools
 from string import Formatter
 import sqlite3
 import socket
+import random
 
 mq = queue.Queue()
 slot = dict()
@@ -48,13 +49,14 @@ def execute(verbose=False, dryrun=False):
 
     while True:
         nomorejob = False
+        time.sleep(random.randint(0, 10))
         with sqlite3.connect(dbfile) as con:
             while True:
                 try:
                     con.execute("BEGIN EXCLUSIVE")
                     cur = con.cursor()
                     cur.execute(
-                        f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL LIMIT 1;"
+                        f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL ORDER BY RANDOM() LIMIT 1;"
                     )
                     row = cur.fetchone()
                     if not row:
@@ -67,7 +69,7 @@ def execute(verbose=False, dryrun=False):
                         cmd,
                     ) = row
                     cur.execute(
-                        f"UPDATE parjob SET Exitval = -1000 WHERE Seq = {taskid};"
+                        f"UPDATE parjob SET Starttime = unixepoch('now'), Exitval = -1000 WHERE Seq = {taskid};"
                     )
                     log(f"{slot[workerid]}: taskid, cmd:", taskid, cmd)
                     assert cur.rowcount == 1
@@ -120,22 +122,31 @@ def execute(verbose=False, dryrun=False):
                     f"UPDATE parjob SET Exitval = {p.returncode}, JobRuntime = {runtime} WHERE Seq = {taskid};"
                 )
                 con.commit()
-
     return 0
 
 
 def jobcount():
-    with sqlite3.connect(dbfile) as con:
-        cur = con.cursor()
-        cur.execute(
-            "SELECT count(1), sum(case when Exitval == 0 then 1 else 0 end) FROM parjob;"
-        )
-        row = cur.fetchone()
-        (
-            total,
-            done,
-        ) = row
-    return (total, done)
+    def dojob():
+        with sqlite3.connect(dbfile) as con:
+            cur = con.cursor()
+            cur.execute(
+                "SELECT count(1), sum(case when Exitval >= 0 then 1 else 0 end) FROM parjob;"
+            )
+            row = cur.fetchone()
+            (
+                total,
+                done,
+            ) = row
+        return (total, done)
+    
+    while True:
+        try:
+            return dojob()
+        except Exception as e:
+            log("Exception:", e)
+            log("Sleep and try again ...")
+            time.sleep(1)
+
 
 
 def cmdlist(argv):
@@ -168,15 +179,43 @@ def cmdlist(argv):
     return cmds
 
 
-def progress(done, total, latest_line=False, progress=False):
+def progress(done, total, latest_line=False, progress=False, timeskip=0.5):
+    def putline():
+        os.system("tput ll")
+        print("\r", end="", flush=True)
+        print(
+            "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f%%/%.02fs"
+            % (
+                active.value,
+                done,
+                total,
+                float(done) / total * 100,
+                time.time() - t0,
+            ),
+            end="",
+            flush=True,
+        )
+        if not latest_line:
+            print("")
+        os.system("tput el")
+
     extra = 1 if progress else 0
+    t0 = time.time()
+    t1 = time.time()
+    t2 = time.time()
     while True:
         workerid, taskid, line = mq.get()
-        if workerid is None:
+        if (workerid is None) or (done == total):
+            total, done = jobcount()
+            putline()
             break
 
         if line is not None:
-            t0 = time.time()
+            if time.time() - t2 > timeskip:
+                t2 = time.time()
+            else:
+                continue
+
             if latest_line:
                 os.system("tput ll")
                 print("\r", end="", flush=True)
@@ -190,47 +229,49 @@ def progress(done, total, latest_line=False, progress=False):
                 print("%d:" % taskid, line, end="", flush=True)
 
             if progress:
-                os.system("tput ll")
-                print("\r", end="", flush=True)
-                print(
-                    "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f%%/%.02fs"
-                    % (
-                        active.value,
-                        done,
-                        total,
-                        float(done) / total * 100,
-                        time.time() - t0,
-                    ),
-                    end="",
-                    flush=True,
-                )
-                if not latest_line:
-                    print("")
-                os.system("tput el")
-        else:
-            total, done = jobcount()
+                ## try not too frequent
+                if time.time() - t1 > 2:
+                    total, done = jobcount()
+                    putline()
+                    t1 = time.time()
+                else:
+                    pass
 
 
 def checkdb(args):
     with sqlite3.connect(dbfile) as con:
         # con.row_factory = sqlite3.Row
         cur = con.cursor()
-        # cur.execute("SELECT count(1) as Total, sum(case when Exitval == 0 then 1 else 0 end) as Finished FROM parjob")
+        # cur.execute("SELECT count(1) as Total, sum(case when Exitval >= 0 then 1 else 0 end) as Finished FROM parjob")
         if args.list:
-            cur.execute("SELECT Seq, Exitval, Command FROM parjob")
+            cur.execute(
+                "SELECT Seq, "
+                "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
+                "JobRuntime, Exitval, Command "
+                "FROM parjob"
+            )
             rows = cur.fetchall()
-            format = " {:>4} {:>7} {:<80}"
+            format = " {:>4} {:<19} {:>9} {:>7} {:<80}"
             colnames = [desc[0] for desc in cur.description]
             bars = ["-" * len(desc[0]) for desc in cur.description]
             print(format.format(*colnames))
             print(format.format(*bars))
             for row in rows:
-                print(format.format(*map(lambda x: str(x), row)))
+                print(
+                    format.format(
+                        *map(
+                            lambda x: str(x)
+                            if not isinstance(x, float)
+                            else "%.2f" % x,
+                            row,
+                        )
+                    )
+                )
         else:
             cur.execute(
                 "SELECT count(1) as Total, "
                 "sum(case when Exitval == -1000 then 1 else 0 end) as Processing, "
-                "sum(case when Exitval == 0 then 1 else 0 end) as Finished "
+                "sum(case when Exitval >= 0 then 1 else 0 end) as Finished "
                 "FROM parjob"
             )
             row = cur.fetchone()
@@ -319,6 +360,7 @@ def main(args):
             total,
             args.latest_line,
             args.progress,
+            args.timeskip,
         ),
     )
     p.start()
@@ -374,6 +416,7 @@ if __name__ == "__main__":
     parser = subparsers.add_parser("init")
     parser.set_defaults(func=initdb)
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
+    parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
 
     ## subcommand: exec
     parser = subparsers.add_parser("exec")
@@ -387,6 +430,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
+    parser.add_argument("--timeskip", type=float, help="timeskip", default=0.5)
 
     parser_args = argparse.ArgumentParser(prog="ARGUMENTS", add_help=False)
     parser_args.add_argument("args", help="arguments", nargs=argparse.REMAINDER)
@@ -407,5 +451,8 @@ if __name__ == "__main__":
     level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
 
+    log("Python version:", ".".join(map(str, sys.version_info[:3])))
+    log("Python info:", sys.version)
     args.func(args)
     sys.exit(0)
+
