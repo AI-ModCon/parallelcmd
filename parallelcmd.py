@@ -311,8 +311,6 @@ def initdb(args):
         fullcmd = cmd.format(*argpair)
         task_list.append((i, fullcmd))
 
-    dbfile = args.dbfile
-
     with sqlite3.connect(dbfile) as con:
         cur = con.cursor()
         try:
@@ -339,7 +337,7 @@ def initdb(args):
         cur.execute(sql)
 
         for i, cmd in task_list:
-            sql = "INSERT INTO parjob (Seq,Command) VALUES (%d, '%s');" % (
+            sql = "INSERT INTO parjob (Seq, Command) VALUES (%d, '%s');" % (
                 i,
                 cmd,
             )
@@ -453,6 +451,9 @@ if __name__ == "__main__":
 
     log("Python version:", ".".join(map(str, sys.version_info[:3])))
     log("Python info:", sys.version)
+
+    dbfile = args.dbfile
+
     args.func(args)
     sys.exit(0)
 
