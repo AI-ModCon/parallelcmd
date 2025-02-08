@@ -313,40 +313,43 @@ def initdb(args):
 
     with sqlite3.connect(dbfile) as con:
         cur = con.cursor()
-        try:
-            sql = "DROP TABLE parjob;"
+        if not args.append:
+            try:
+                sql = "DROP TABLE parjob;"
+                cur.execute(sql)
+            except:
+                pass
+
+            sql = (
+                "CREATE TABLE IF NOT EXISTS parjob ("
+                "  Seq INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  Host TEXT,"
+                "  Starttime FLOAT(44),"
+                "  JobRuntime FLOAT(44),"
+                "  Send BIGINT,"
+                "  Receive BIGINT,"
+                "  Exitval BIGINT,"
+                "  _Signal BIGINT,"
+                "  Command TEXT,"
+                "  V1 TEXT,"
+                "  Stdout TEXT,"
+                "  Stderr TEXT);"
+            )
             cur.execute(sql)
-        except:
-            pass
+            print("%s created" % (dbfile))
 
-        sql = (
-            "CREATE TABLE parjob "
-            "(Seq BIGINT,"
-            " Host TEXT,"
-            " Starttime FLOAT(44),"
-            " JobRuntime FLOAT(44),"
-            " Send BIGINT,"
-            " Receive BIGINT,"
-            " Exitval BIGINT,"
-            " _Signal BIGINT,"
-            " Command TEXT,"
-            " V1 TEXT,"
-            " Stdout TEXT,"
-            " Stderr TEXT);"
-        )
-        cur.execute(sql)
-
+        inserted_rows = 0
         for i, cmd in task_list:
-            sql = "INSERT INTO parjob (Seq, Command) VALUES (%d, '%s');" % (
-                i,
+            sql = "INSERT INTO parjob (Command) VALUES ('%s');" % (
                 cmd,
             )
             cur.execute(sql)
+            inserted_rows += cur.rowcount
         con.commit()
-        res = cur.execute("select count(*) from parjob;")
-        (ntotal,) = res.fetchone()
-        print("%s created" % (dbfile))
-        print("%d tasks added." % (ntotal))
+        print("%d tasks added." % (inserted_rows))
+        # res = cur.execute("select count(*) from parjob;")
+        # (ntotal,) = res.fetchone()
+        # print("%d Total added." % (ntotal))
 
 
 def main(args):
@@ -415,6 +418,7 @@ if __name__ == "__main__":
     parser.set_defaults(func=initdb)
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
+    parser.add_argument("--append", action="store_true", help="append")
 
     ## subcommand: exec
     parser = subparsers.add_parser("exec")
@@ -428,7 +432,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
-    parser.add_argument("--timeskip", type=float, help="timeskip", default=0.5)
+    parser.add_argument("--timeskip", type=float, help="timeskip", default=0.0)
 
     parser_args = argparse.ArgumentParser(prog="ARGUMENTS", add_help=False)
     parser_args.add_argument("args", help="arguments", nargs=argparse.REMAINDER)
