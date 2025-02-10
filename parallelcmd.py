@@ -138,7 +138,7 @@ def jobcount():
                 done,
             ) = row
         return (total, done)
-    
+
     while True:
         try:
             return dojob()
@@ -146,7 +146,6 @@ def jobcount():
             log("Exception:", e)
             log("Sleep and try again ...")
             time.sleep(1)
-
 
 
 def cmdlist(argv):
@@ -285,12 +284,41 @@ def checkdb(args):
 
 def resetdb(args):
     with sqlite3.connect(dbfile) as con:
+        filter = "Exitval <> 0"
+        if args.cmd_like is not None:
+            filter = f"Command LIKE '{args.cmd_like}'"
+
         cur = con.cursor()
-        cur.execute("SELECT count(*) FROM parjob WHERE Exitval <> 0;")
-        (count,) = cur.fetchone()
+        cur.execute(
+            "SELECT Seq, "
+            "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
+            "JobRuntime, Exitval, Command "
+            "FROM parjob "
+            f"WHERE {filter};"
+        )
+        rows = cur.fetchall()
+        format = " {:>4} {:<19} {:>9} {:>7} {:<80}"
+        colnames = [desc[0] for desc in cur.description]
+        bars = ["-" * len(desc[0]) for desc in cur.description]
+        print(format.format(*colnames))
+        print(format.format(*bars))
+        for row in rows:
+            print(
+                format.format(
+                    *map(
+                        lambda x: str(x)
+                        if not isinstance(x, float)
+                        else "%.2f" % x,
+                        row,
+                    )
+                )
+            )
+
+        # (count,) = cur.fetchone()
+        count = len(rows)
         ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
         if ans == "Y" or ans == "y":
-            cur.execute("UPDATE parjob SET Exitval = NULL WHERE Exitval <> 0;")
+            cur.execute(f"UPDATE parjob SET Exitval = NULL WHERE {filter};")
             print("Rset:", cur.rowcount)
             con.commit()
         else:
@@ -340,9 +368,7 @@ def initdb(args):
 
         inserted_rows = 0
         for i, cmd in task_list:
-            sql = "INSERT INTO parjob (Command) VALUES ('%s');" % (
-                cmd,
-            )
+            sql = "INSERT INTO parjob (Command) VALUES ('%s');" % (cmd,)
             cur.execute(sql)
             inserted_rows += cur.rowcount
         con.commit()
@@ -411,6 +437,7 @@ if __name__ == "__main__":
 
     ## subcommand: reset
     parser = subparsers.add_parser("reset")
+    parser.add_argument("--cmd_like", help="like statement")
     parser.set_defaults(func=resetdb)
 
     ## subcommand: init
@@ -460,4 +487,3 @@ if __name__ == "__main__":
 
     args.func(args)
     sys.exit(0)
-
