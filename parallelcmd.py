@@ -42,7 +42,7 @@ def hello(counter: mp.Value):
     return 0
 
 
-def execute(verbose=False, dryrun=False):
+def execute(verbose=False, dryrun=False, randomorder=False):
     ## check in
     hostname = socket.gethostname()
     workerid = threading.get_native_id()
@@ -55,9 +55,11 @@ def execute(verbose=False, dryrun=False):
                 try:
                     con.execute("BEGIN EXCLUSIVE")
                     cur = con.cursor()
-                    cur.execute(
-                        f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL ORDER BY RANDOM() LIMIT 1;"
-                    )
+                    if randomorder:
+                        sql = f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL ORDER BY RANDOM() LIMIT 1;"
+                    else:
+                        sql = f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL LIMIT 1;"
+                    cur.execute(sql)
                     row = cur.fetchone()
                     if not row:
                         log(f"{slot[workerid]}: No more job")
@@ -178,7 +180,7 @@ def cmdlist(argv):
     return cmds
 
 
-def progress(done, total, latest_line=False, progress=False, timeskip=0.5):
+def progress(done, total, latest_line=False, progress=False, timeskip=0.0):
     def putline():
         os.system("tput ll")
         print("\r", end="", flush=True)
@@ -259,9 +261,9 @@ def checkdb(args):
                 print(
                     format.format(
                         *map(
-                            lambda x: str(x)
-                            if not isinstance(x, float)
-                            else "%.2f" % x,
+                            lambda x: (
+                                str(x) if not isinstance(x, float) else "%.2f" % x
+                            ),
                             row,
                         )
                     )
@@ -306,9 +308,7 @@ def resetdb(args):
             print(
                 format.format(
                     *map(
-                        lambda x: str(x)
-                        if not isinstance(x, float)
-                        else "%.2f" % x,
+                        lambda x: str(x) if not isinstance(x, float) else "%.2f" % x,
                         row,
                     )
                 )
@@ -402,7 +402,12 @@ def main(args):
     with pool as executor:
         future_list = list()
         for index in range(args.nworkers):
-            future = executor.submit(execute, verbose=args.verbose, dryrun=args.dryrun)
+            future = executor.submit(
+                execute,
+                verbose=args.verbose,
+                dryrun=args.dryrun,
+                randomorder=args.randomorder,
+            )
             future_list.append(future)
 
         for future in future_list:
@@ -460,6 +465,7 @@ if __name__ == "__main__":
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("--timeskip", type=float, help="timeskip", default=0.0)
+    parser.add_argument("--randomorder", action="store_true", help="randomorder")
 
     parser_args = argparse.ArgumentParser(prog="ARGUMENTS", add_help=False)
     parser_args.add_argument("args", help="arguments", nargs=argparse.REMAINDER)
