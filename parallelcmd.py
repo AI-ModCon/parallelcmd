@@ -289,6 +289,8 @@ def resetdb(args):
         filter = "Exitval <> 0"
         if args.cmd_like is not None:
             filter = f"Command LIKE '{args.cmd_like}'"
+        if args.all:
+            filter = "1=1"
 
         cur = con.cursor()
         cur.execute(
@@ -443,6 +445,7 @@ if __name__ == "__main__":
     ## subcommand: reset
     parser = subparsers.add_parser("reset")
     parser.add_argument("--cmd_like", help="like statement")
+    parser.add_argument("--all", action="store_true", help="reset all")
     parser.set_defaults(func=resetdb)
 
     ## subcommand: init
