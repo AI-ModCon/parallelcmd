@@ -42,7 +42,7 @@ def hello(counter: mp.Value):
     return 0
 
 
-def execute(verbose=False, dryrun=False, randomorder=False):
+def execute(verbose=False, dryrun=False, randomorder=False, prefix=None):
     ## check in
     hostname = socket.gethostname()
     workerid = threading.get_native_id()
@@ -85,6 +85,8 @@ def execute(verbose=False, dryrun=False, randomorder=False):
             break
 
         bashcmd = "bash -c '%s'" % cmd
+        if prefix is not None:
+            bashcmd = "%s bash -c '%s'" % (prefix, cmd)
         if verbose:
             print("%d: cmd:" % taskid, bashcmd)
 
@@ -409,6 +411,7 @@ def main(args):
                 verbose=args.verbose,
                 dryrun=args.dryrun,
                 randomorder=args.randomorder,
+                prefix=args.prefix,
             )
             future_list.append(future)
 
@@ -469,6 +472,7 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("--timeskip", type=float, help="timeskip", default=0.0)
     parser.add_argument("--randomorder", action="store_true", help="randomorder")
+    parser.add_argument("--prefix", help="cmd prefix")
 
     parser_args = argparse.ArgumentParser(prog="ARGUMENTS", add_help=False)
     parser_args.add_argument("args", help="arguments", nargs=argparse.REMAINDER)
