@@ -170,6 +170,8 @@ def cmdlist(argv):
             if _type == 1:
                 with open(x, "r") as f:
                     for line in f.readlines():
+                        if line.startswith("#") or line.strip() == "":
+                            continue
                         _args.append(line.rstrip())
             else:
                 _args.append(x)
