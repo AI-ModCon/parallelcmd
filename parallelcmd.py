@@ -328,7 +328,7 @@ def resetdb(args):
         count = len(rows)
         ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
         if ans == "Y" or ans == "y":
-            cur.execute(f"UPDATE parjob SET Exitval = NULL WHERE {filter};")
+            cur.execute(f"UPDATE parjob SET Starttime = NULL, JobRuntime = NULL, Exitval = NULL WHERE {filter};")
             print("Rset:", cur.rowcount)
             con.commit()
         else:
