@@ -295,10 +295,10 @@ def resetdb(args):
             filter = f"Command LIKE '{args.cmd_like}'"
         if args.all:
             filter = "1=1"
-        if args.ids:
-            if not isinstance(args.ids, list):
-                args.ids = [args.ids]
-            filter = "Seq IN (%s)" % ",".join(map(str, args.ids))
+        if args.id:
+            if not isinstance(args.id, list):
+                args.id = [args.id]
+            filter = "Seq IN (%s)" % ",".join(map(str, args.id))
 
         cur = con.cursor()
         cur.execute(
@@ -455,7 +455,7 @@ if __name__ == "__main__":
     parser = subparsers.add_parser("reset")
     parser.add_argument("--cmd_like", help="like statement")
     parser.add_argument("--all", action="store_true", help="reset all")
-    parser.add_argument("--ids", type=int, help="reset by ids", nargs="+")
+    parser.add_argument("--id", type=int, help="reset by id", nargs="+")
     parser.set_defaults(func=resetdb)
 
     ## subcommand: init
