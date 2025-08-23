@@ -291,8 +291,8 @@ def checkdb(args):
 def resetdb(args):
     with sqlite3.connect(dbfile) as con:
         filter = "Exitval <> 0"
-        if args.cmd_like is not None:
-            filter = f"Command LIKE '{args.cmd_like}'"
+        if args.like is not None:
+            filter = f"Command LIKE '{args.like}'"
         if args.all:
             filter = "1=1"
         if args.id:
@@ -330,6 +330,52 @@ def resetdb(args):
         if ans == "Y" or ans == "y":
             cur.execute(f"UPDATE parjob SET Starttime = NULL, JobRuntime = NULL, Exitval = NULL WHERE {filter};")
             print("Rset:", cur.rowcount)
+            con.commit()
+        else:
+            print("Aborted.")
+
+def deletedb(args):
+    with sqlite3.connect(dbfile) as con:
+        filter = "Exitval <> 0"
+        if args.like is not None:
+            filter = f"Command LIKE '{args.like}'"
+        if args.all:
+            filter = "1=1"
+        if args.id:
+            if not isinstance(args.id, list):
+                args.id = [args.id]
+            filter = "Seq IN (%s)" % ",".join(map(str, args.id))
+
+        cur = con.cursor()
+        cur.execute(
+            "SELECT Seq, "
+            "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
+            "JobRuntime, Exitval, Command "
+            "FROM parjob "
+            f"WHERE {filter};"
+        )
+        rows = cur.fetchall()
+        format = " {:>4} {:<19} {:>9} {:>7} {:<80}"
+        colnames = [desc[0] for desc in cur.description]
+        bars = ["-" * len(desc[0]) for desc in cur.description]
+        print(format.format(*colnames))
+        print(format.format(*bars))
+        for row in rows:
+            print(
+                format.format(
+                    *map(
+                        lambda x: str(x) if not isinstance(x, float) else "%.2f" % x,
+                        row,
+                    )
+                )
+            )
+
+        # (count,) = cur.fetchone()
+        count = len(rows)
+        ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
+        if ans == "Y" or ans == "y":
+            cur.execute(f"DELETE FROM parjob WHERE {filter};")
+            print("Delete:", cur.rowcount)
             con.commit()
         else:
             print("Aborted.")
@@ -453,10 +499,17 @@ if __name__ == "__main__":
 
     ## subcommand: reset
     parser = subparsers.add_parser("reset")
-    parser.add_argument("--cmd_like", help="like statement")
+    parser.add_argument("--like", help="like statement")
     parser.add_argument("--all", action="store_true", help="reset all")
     parser.add_argument("--id", type=int, help="reset by id", nargs="+")
     parser.set_defaults(func=resetdb)
+
+    ## subcommand: delete
+    parser = subparsers.add_parser("delete")
+    parser.add_argument("--like", help="like statement")
+    parser.add_argument("--all", action="store_true", help="delete all")
+    parser.add_argument("--id", type=int, help="remove by id", nargs="+")
+    parser.set_defaults(func=deletedb)
 
     ## subcommand: init
     parser = subparsers.add_parser("init")
