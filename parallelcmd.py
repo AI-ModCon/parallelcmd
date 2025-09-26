@@ -53,7 +53,7 @@ def execute(verbose=False, dryrun=False, randomorder=False, prefix=None):
         with sqlite3.connect(dbfile) as con:
             while True:
                 try:
-                    con.execute("BEGIN EXCLUSIVE")
+                    con.execute("BEGIN EXCLUSIVE;")
                     cur = con.cursor()
                     if randomorder:
                         sql = f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL ORDER BY RANDOM() LIMIT 1;"
@@ -253,7 +253,7 @@ def checkdb(args):
                 "SELECT Seq, "
                 "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
                 "JobRuntime, Exitval, Command "
-                "FROM parjob"
+                "FROM parjob;"
             )
             rows = cur.fetchall()
             format = " {:>4} {:<19} {:>9} {:>7} {:<80}"
@@ -277,7 +277,7 @@ def checkdb(args):
                 "SELECT count(1) as Total, "
                 "sum(case when Exitval == -1000 then 1 else 0 end) as Processing, "
                 "sum(case when Exitval >= 0 then 1 else 0 end) as Finished "
-                "FROM parjob"
+                "FROM parjob;"
             )
             row = cur.fetchone()
             format = " {:>5} {:>10} {:>8}"
@@ -358,6 +358,8 @@ def initdb(args):
             except:
                 pass
 
+            # Enable WAL mode
+            cur.execute('PRAGMA journal_mode=WAL;')
             sql = (
                 "CREATE TABLE IF NOT EXISTS parjob ("
                 "  Seq INTEGER PRIMARY KEY AUTOINCREMENT,"
