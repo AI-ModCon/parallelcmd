@@ -184,7 +184,7 @@ def cmdlist(argv):
     return cmds
 
 
-def progress(done, total, latest_line=False, progress=False, timeskip=0.0):
+def progress(done, total, dashboard=False, progress=False, timeskip=0.0):
     def putline():
         os.system("tput ll")
         print("\r", end="", flush=True)
@@ -200,7 +200,7 @@ def progress(done, total, latest_line=False, progress=False, timeskip=0.0):
             end="",
             flush=True,
         )
-        if not latest_line:
+        if not dashboard:
             print("")
         os.system("tput el")
 
@@ -221,7 +221,7 @@ def progress(done, total, latest_line=False, progress=False, timeskip=0.0):
             else:
                 continue
 
-            if latest_line:
+            if dashboard:
                 os.system("tput ll")
                 print("\r", end="", flush=True)
                 os.system("tput sc")
@@ -441,12 +441,18 @@ def initdb(args):
 
 def main(args):
     total, done = jobcount()
+
+    if args.dashboard:
+        ## print empty lines to leave space for each worker
+        for i in range(args.nworkers + 1):
+            print("")
+
     p = threading.Thread(
         target=progress,
         args=(
             done,
             total,
-            args.latest_line,
+            args.dashboard,
             args.progress,
             args.timeskip,
         ),
@@ -536,7 +542,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--progress", action="store_true", help="print progress")
     parser.add_argument(
-        "--latest-line", action="store_true", help="print only last line"
+        "--dashboard", action="store_true", help="print only last line"
     )
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
@@ -544,21 +550,21 @@ if __name__ == "__main__":
     parser.add_argument("--randomorder", action="store_true", help="randomorder")
     parser.add_argument("--prefix", help="cmd prefix")
 
-    parser_args = argparse.ArgumentParser(prog="ARGUMENTS", add_help=False)
-    parser_args.add_argument("args", help="arguments", nargs=argparse.REMAINDER)
-
     cmds = cmdlist(sys.argv[1:])
     args, _unknown = parser_main.parse_known_args(cmds[0])
     if len(_unknown) > 0:
-        print("Unknown options:", _unknown)
-        usage()
+        idx_list = [i for i, x in enumerate(cmds[0]) if x in subparsers.choices.keys()]
+        idx = min(idx_list) if len(idx_list) > 0 else 0
 
-    if args.command == "init":
-        args_cmd_list = list()
-        for cmd in cmds[1:]:
-            args_cmd, _unknown = parser_args.parse_known_args(cmd)
-            if len(_unknown) > 0:
-                usage()
+        ## re-arrange and try again
+        for x in reversed(_unknown):
+            cmds[0].remove(x)
+            cmds[0].insert(idx, x)
+
+        args, _unknown = parser_main.parse_known_args(cmds[0])
+        if len(_unknown) > 0:
+            print("Unknown options:", _unknown)
+            usage()
 
     level = logging.DEBUG if args.log_level == "debug" else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
@@ -568,5 +574,7 @@ if __name__ == "__main__":
 
     dbfile = args.dbfile
 
+    if args.command is None:
+        usage()
     args.func(args)
     sys.exit(0)
