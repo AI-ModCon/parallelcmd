@@ -328,11 +328,14 @@ def resetdb(args):
         count = len(rows)
         ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
         if ans == "Y" or ans == "y":
-            cur.execute(f"UPDATE parjob SET Starttime = NULL, JobRuntime = NULL, Exitval = NULL WHERE {filter};")
+            cur.execute(
+                f"UPDATE parjob SET Starttime = NULL, JobRuntime = NULL, Exitval = NULL WHERE {filter};"
+            )
             print("Rset:", cur.rowcount)
             con.commit()
         else:
             print("Aborted.")
+
 
 def deletedb(args):
     with sqlite3.connect(dbfile) as con:
@@ -405,7 +408,7 @@ def initdb(args):
                 pass
 
             # Enable WAL mode
-            cur.execute('PRAGMA journal_mode=WAL;')
+            cur.execute("PRAGMA journal_mode=WAL;")
             sql = (
                 "CREATE TABLE IF NOT EXISTS parjob ("
                 "  Seq INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -488,7 +491,12 @@ if __name__ == "__main__":
 
     parser_main = argparse.ArgumentParser(prog="OPTIONS", add_help=False)
     parser_main.add_argument("--dbfile", help="dbfile", default="pardb.sqlite")
-    parser_main.add_argument("-v", "--verbose", action="store_true", help="verbose")
+    parser_main.add_argument(
+        "--log-level",
+        choices=["debug", "info"],
+        default="info",
+        help="Set log level (debug or info)",
+    )
 
     subparsers = parser_main.add_subparsers(
         title="subcommands", description="valid subcommands", dest="command"
@@ -552,7 +560,7 @@ if __name__ == "__main__":
             if len(_unknown) > 0:
                 usage()
 
-    level = logging.DEBUG if args.verbose else logging.INFO
+    level = logging.DEBUG if args.log_level == "debug" else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
 
     log("Python version:", ".".join(map(str, sys.version_info[:3])))
