@@ -516,14 +516,14 @@ if __name__ == "__main__":
     ## subcommand: reset
     parser = subparsers.add_parser("reset")
     parser.add_argument("--like", help="like statement")
-    parser.add_argument("--all", action="store_true", help="reset all")
+    parser.add_argument("-a", "--all", action="store_true", help="reset all")
     parser.add_argument("--id", type=int, help="reset by id", nargs="+")
     parser.set_defaults(func=resetdb)
 
     ## subcommand: delete
     parser = subparsers.add_parser("delete")
     parser.add_argument("--like", help="like statement")
-    parser.add_argument("--all", action="store_true", help="delete all")
+    parser.add_argument("-a", "--all", action="store_true", help="delete all")
     parser.add_argument("--id", type=int, help="remove by id", nargs="+")
     parser.set_defaults(func=deletedb)
 
