@@ -179,7 +179,6 @@ def cmdlist(argv):
                 _args.append(x)
 
     cmds.append(_args)
-    _args = list()
 
     return cmds
 
@@ -398,6 +397,9 @@ def initdb(args):
         fullcmd = cmd.format(*argpair)
         task_list.append((i, fullcmd))
 
+    if args.reverse:
+        task_list.reverse()
+
     with sqlite3.connect(dbfile) as con:
         cur = con.cursor()
         if not args.append:
@@ -539,6 +541,7 @@ if __name__ == "__main__":
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("-a", "--append", action="store_true", help="append")
+    parser.add_argument("-r", "--reverse", action="store_true", help="reverse")
 
     ## subcommand: exec
     parser = subparsers.add_parser("exec")
