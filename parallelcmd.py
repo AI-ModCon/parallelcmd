@@ -429,9 +429,15 @@ def initdb(args):
 
         inserted_rows = 0
         for i, cmd in task_list:
-            sql = "INSERT INTO parjob (Command) VALUES ('%s');" % (cmd,)
+            sql = "SELECT 1 FROM parjob WHERE Command = '%s';" % (cmd,)
             cur.execute(sql)
-            inserted_rows += cur.rowcount
+            exists = cur.fetchone()
+            if not exists:
+                sql = "INSERT INTO parjob (Command) VALUES ('%s');" % (cmd,)
+                cur.execute(sql)
+                inserted_rows += cur.rowcount
+            else:
+                print("Already exists. Skip:", cmd)
         con.commit()
         print("%d tasks added." % (inserted_rows))
         # res = cur.execute("select count(*) from parjob;")
@@ -532,7 +538,7 @@ if __name__ == "__main__":
     parser.set_defaults(func=initdb)
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
-    parser.add_argument("--append", action="store_true", help="append")
+    parser.add_argument("-a", "--append", action="store_true", help="append")
 
     ## subcommand: exec
     parser = subparsers.add_parser("exec")
@@ -541,9 +547,7 @@ if __name__ == "__main__":
         "-j", "--nworkers", type=int, help="Number of workers", default=4
     )
     parser.add_argument("--progress", action="store_true", help="print progress")
-    parser.add_argument(
-        "--dashboard", action="store_true", help="print only last line"
-    )
+    parser.add_argument("--dashboard", action="store_true", help="print only last line")
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("--timeskip", type=float, help="timeskip", default=0.0)
