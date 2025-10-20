@@ -383,6 +383,66 @@ def deletedb(args):
             print("Aborted.")
 
 
+def updatedb(args):
+    with sqlite3.connect(dbfile) as con:
+        filter = "1 = 1"
+        if args.like is not None:
+            filter = f"Command LIKE '{args.like}'"
+        if args.id:
+            if not isinstance(args.id, list):
+                args.id = [args.id]
+            filter = "Seq IN (%s)" % ",".join(map(str, args.id))
+
+        cur = con.cursor()
+        cur.execute(
+            "SELECT Seq, "
+            "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
+            "JobRuntime, Exitval, Command "
+            "FROM parjob "
+            f"WHERE {filter};"
+        )
+        rows = cur.fetchall()
+        format = " {:>4} {:<19} {:>9} {:>7} {:<80}"
+        colnames = [desc[0] for desc in cur.description]
+        bars = ["-" * len(desc[0]) for desc in cur.description]
+        print(format.format(*colnames))
+        print(format.format(*bars))
+        replace_a, replace_b = args.replace.split(",")
+        for row in rows:
+            cmd = row[-1]
+            new_cmd = cmd.replace(replace_a, replace_b)
+
+            print(
+                format.format(
+                    *map(
+                        lambda x: str(x) if not isinstance(x, float) else "%.2f" % x,
+                        row,
+                    )
+                ),
+                "->",
+                new_cmd,
+            )
+
+        count = len(rows)
+        ans = input("%d number of rows will be updated. Continue? (Y/N): " % count)
+        if ans == "Y" or ans == "y":
+            affected_rowcount = 0
+            for row in rows:
+                seq = row[0]
+                cmd = row[-1]
+                new_cmd = cmd.replace(replace_a, replace_b)
+
+                cur.execute(
+                    "UPDATE parjob SET Command = ? WHERE Seq = ?;", (new_cmd, seq)
+                )
+                affected_rowcount += cur.rowcount
+
+            print("Updated:", affected_rowcount)
+            con.commit()
+        else:
+            print("Aborted.")
+
+
 def initdb(args):
     cmds = cmdlist(sys.argv[1:])
     args_list = cmds[1:]
@@ -555,7 +615,14 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("--timeskip", type=float, help="timeskip", default=0.0)
     parser.add_argument("--randomorder", action="store_true", help="randomorder")
-    parser.add_argument("--prefix", help="cmd prefix")
+    parser.add_argument("--prefix", help="command prefix")
+
+    ## subcommand: update
+    parser = subparsers.add_parser("update")
+    parser.add_argument("--replace", help="replace statement in the form of 'old,new'")
+    parser.add_argument("--like", help="like statement")
+    parser.add_argument("--id", type=int, help="reset by id", nargs="+")
+    parser.set_defaults(func=updatedb)
 
     cmds = cmdlist(sys.argv[1:])
     args, _unknown = parser_main.parse_known_args(cmds[0])
