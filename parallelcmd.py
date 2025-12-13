@@ -20,6 +20,7 @@ from string import Formatter
 import sqlite3
 import socket
 import random
+import datetime
 
 mq = queue.Queue()
 slot = dict()
@@ -42,15 +43,78 @@ def hello(counter: mp.Value):
     return 0
 
 
-def execute(verbose=False, dryrun=False, randomorder=False, prefix=None, max_jobs=None):
+def timedelta_parse(text):
+    """
+    Convert input string to timedelta.
+    format: [[[d-]h:]m:]s
+    """
+    tokens = text.replace("-", ":").split(":")
+    vals = {
+        key: float(val)
+        for val, key in zip(tokens[::-1], ("seconds", "minutes", "hours", "days"))
+    }
+    return datetime.timedelta(**vals)
+
+
+def execute(
+    verbose=False,
+    dryrun=False,
+    randomorder=False,
+    prefix=None,
+    max_jobs=None,
+    check_slurm=False,
+):
     ## check in
     hostname = socket.gethostname()
     workerid = threading.get_native_id()
+    nomorejob = False
     finished = 0
 
     while True:
-        nomorejob = False
         time.sleep(random.randint(0, 10))
+
+        if check_slurm:
+            jobid = os.getenv("SLURM_JOB_ID", None)
+            assert jobid is not None, "SLURM_JOB_ID not found in environment variables."
+            cmd = f"squeue -h -j {jobid} -o %L"
+            proc = subprocess.run(cmd.split(), stdout=subprocess.PIPE)
+            timestr = proc.stdout.decode("utf-8").strip()
+            try:
+                left = timedelta_parse(timestr).total_seconds()
+            except Exception as e:
+                ## "INVALID" when remaining time is less than a few seconds
+                log(f"{slot[workerid]}: Exception parsing time string '{timestr}':", e)
+                left = 0.0
+            log(
+                f"{slot[workerid]}: SLURM job {jobid} remaining time: {left:.2f} seconds"
+            )
+
+            with sqlite3.connect(dbfile) as con:
+                cur = con.cursor()
+                sql = (
+                    "SELECT JobRuntime AS q3_runtime "
+                    "FROM parjob "
+                    "WHERE JobRuntime IS NOT NULL "
+                    "ORDER BY JobRuntime "
+                    "LIMIT 1 "
+                    "OFFSET ( "
+                    "SELECT CAST(0.75 * COUNT(*) AS INT) "
+                    "FROM parjob "
+                    "WHERE JobRuntime IS NOT NULL "
+                    ");"
+                )
+                cur.execute(sql)
+                row = cur.fetchone()
+                if row and row[0]:
+                    q3_runtime = row[0]
+                    log(f"{slot[workerid]}: Q3 runtime {q3_runtime:.2f} seconds")
+
+                    if left < q3_runtime:
+                        log(
+                            f"{slot[workerid]}: Remaining time {left:.2f} seconds is less than Q3 runtime {q3_runtime:.2f}. Stop fetching new jobs."
+                        )
+                        break
+
         with sqlite3.connect(dbfile) as con:
             while True:
                 try:
@@ -133,7 +197,7 @@ def execute(verbose=False, dryrun=False, randomorder=False, prefix=None, max_job
                 con.commit()
             finished += 1
 
-            if finished >= max_jobs:
+            if max_jobs is not None and finished >= max_jobs:
                 break
     return 0
 
@@ -505,12 +569,12 @@ def initdb(args):
             sql = "SELECT 1 FROM parjob WHERE Command = '%s';" % (cmd,)
             cur.execute(sql)
             exists = cur.fetchone()
-            if not exists:
+            if args.check_dup and exists:
+                print("Already exists. Skip:", cmd)
+            else:
                 sql = "INSERT INTO parjob (Command) VALUES ('%s');" % (cmd,)
                 cur.execute(sql)
                 inserted_rows += cur.rowcount
-            else:
-                print("Already exists. Skip:", cmd)
         con.commit()
         print("%d tasks added." % (inserted_rows))
         # res = cur.execute("select count(*) from parjob;")
@@ -555,6 +619,7 @@ def main(args):
                 randomorder=args.randomorder,
                 prefix=args.prefix,
                 max_jobs=args.max_jobs,
+                check_slurm=args.check_slurm,
             )
             future_list.append(future)
 
@@ -578,7 +643,7 @@ if __name__ == "__main__":
     parser_main = argparse.ArgumentParser(prog="OPTIONS", add_help=False)
     parser_main.add_argument("--dbfile", help="dbfile", default="pardb.sqlite")
     parser_main.add_argument(
-        "--log-level",
+        "--log_level",
         choices=["debug", "info"],
         default="info",
         help="Set log level (debug or info)",
@@ -615,6 +680,9 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("-a", "--append", action="store_true", help="append")
     parser.add_argument("-r", "--reverse", action="store_true", help="reverse")
+    parser.add_argument(
+        "--check_dup", action="store_true", help="allow duplicate commands"
+    )
 
     ## subcommand: exec
     parser = subparsers.add_parser("exec")
@@ -629,7 +697,10 @@ if __name__ == "__main__":
     parser.add_argument("--timeskip", type=float, help="timeskip", default=0.0)
     parser.add_argument("--randomorder", action="store_true", help="randomorder")
     parser.add_argument("--prefix", help="command prefix")
-    parser.add_argument("--max_jobs", type=int, help="maximum number of jobs per process to run")
+    parser.add_argument(
+        "--max_jobs", type=int, help="maximum number of jobs per process to run"
+    )
+    parser.add_argument("--check_slurm", action="store_true", help="check slurm")
 
     ## subcommand: update
     parser = subparsers.add_parser("update")
