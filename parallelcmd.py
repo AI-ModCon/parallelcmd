@@ -42,10 +42,11 @@ def hello(counter: mp.Value):
     return 0
 
 
-def execute(verbose=False, dryrun=False, randomorder=False, prefix=None):
+def execute(verbose=False, dryrun=False, randomorder=False, prefix=None, max_jobs=None):
     ## check in
     hostname = socket.gethostname()
     workerid = threading.get_native_id()
+    finished = 0
 
     while True:
         nomorejob = False
@@ -106,8 +107,12 @@ def execute(verbose=False, dryrun=False, randomorder=False, prefix=None):
             with active.get_lock():
                 active_ps[workerid] = p
 
-            for line in iter(p.stdout.readline, ""):
-                mq.put((workerid, taskid, line))
+            try:
+                for line in iter(p.stdout.readline, ""):
+                    mq.put((workerid, taskid, line))
+            except Exception as e:
+                log(f"{slot[workerid]}: Exception:", e)
+                print(line.rstrip(), flush=True)
 
             p.wait()
             ## check out
@@ -126,6 +131,10 @@ def execute(verbose=False, dryrun=False, randomorder=False, prefix=None):
                     f"UPDATE parjob SET Exitval = {p.returncode}, JobRuntime = {runtime} WHERE Seq = {taskid};"
                 )
                 con.commit()
+            finished += 1
+
+            if finished >= max_jobs:
+                break
     return 0
 
 
@@ -290,6 +299,8 @@ def checkdb(args):
 def resetdb(args):
     with sqlite3.connect(dbfile) as con:
         filter = "Exitval <> 0"
+        if args.where is not None:
+            filter = f"{args.where}"
         if args.like is not None:
             filter = f"Command LIKE '{args.like}'"
         if args.all:
@@ -543,6 +554,7 @@ def main(args):
                 dryrun=args.dryrun,
                 randomorder=args.randomorder,
                 prefix=args.prefix,
+                max_jobs=args.max_jobs,
             )
             future_list.append(future)
 
@@ -583,6 +595,7 @@ if __name__ == "__main__":
 
     ## subcommand: reset
     parser = subparsers.add_parser("reset")
+    parser.add_argument("--where", help="where statement")
     parser.add_argument("--like", help="like statement")
     parser.add_argument("-a", "--all", action="store_true", help="reset all")
     parser.add_argument("--id", type=int, help="reset by id", nargs="+")
@@ -616,6 +629,7 @@ if __name__ == "__main__":
     parser.add_argument("--timeskip", type=float, help="timeskip", default=0.0)
     parser.add_argument("--randomorder", action="store_true", help="randomorder")
     parser.add_argument("--prefix", help="command prefix")
+    parser.add_argument("--max_jobs", type=int, help="maximum number of jobs per process to run")
 
     ## subcommand: update
     parser = subparsers.add_parser("update")
