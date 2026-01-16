@@ -62,7 +62,7 @@ def execute(
     randomorder=False,
     prefix=None,
     max_jobs=None,
-    check_slurm=False,
+    check_timeleft=0.0,
 ):
     ## check in
     hostname = socket.gethostname()
@@ -73,7 +73,7 @@ def execute(
     while True:
         time.sleep(random.randint(0, 10))
 
-        if check_slurm:
+        if check_timeleft > 0:
             jobid = os.getenv("SLURM_JOB_ID", None)
             assert jobid is not None, "SLURM_JOB_ID not found in environment variables."
             cmd = f"squeue -h -j {jobid} -o %L"
@@ -89,31 +89,11 @@ def execute(
                 f"{slot[workerid]}: SLURM job {jobid} remaining time: {left:.2f} seconds"
             )
 
-            with sqlite3.connect(dbfile) as con:
-                cur = con.cursor()
-                sql = (
-                    "SELECT JobRuntime AS q3_runtime "
-                    "FROM parjob "
-                    "WHERE JobRuntime IS NOT NULL "
-                    "ORDER BY JobRuntime "
-                    "LIMIT 1 "
-                    "OFFSET ( "
-                    "SELECT CAST(0.75 * COUNT(*) AS INT) "
-                    "FROM parjob "
-                    "WHERE JobRuntime IS NOT NULL "
-                    ");"
+            if left < check_timeleft:
+                log(
+                    f"{slot[workerid]}: Remaining time {left:.2f} seconds is less than threshold {check_timeleft}. Stop fetching new jobs."
                 )
-                cur.execute(sql)
-                row = cur.fetchone()
-                if row and row[0]:
-                    q3_runtime = row[0]
-                    log(f"{slot[workerid]}: Q3 runtime {q3_runtime:.2f} seconds")
-
-                    if left < q3_runtime:
-                        log(
-                            f"{slot[workerid]}: Remaining time {left:.2f} seconds is less than Q3 runtime {q3_runtime:.2f}. Stop fetching new jobs."
-                        )
-                        break
+                break
 
         with sqlite3.connect(dbfile) as con:
             while True:
@@ -619,7 +599,7 @@ def main(args):
                 randomorder=args.randomorder,
                 prefix=args.prefix,
                 max_jobs=args.max_jobs,
-                check_slurm=args.check_slurm,
+                check_timeleft=args.check_timeleft,
             )
             future_list.append(future)
 
@@ -700,7 +680,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_jobs", type=int, help="maximum number of jobs per process to run"
     )
-    parser.add_argument("--check_slurm", action="store_true", help="check slurm")
+    parser.add_argument("--check_timeleft", type=float, help="check timeleft (seconds)")
 
     ## subcommand: update
     parser = subparsers.add_parser("update")
