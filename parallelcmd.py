@@ -62,7 +62,7 @@ def execute(
     randomorder=False,
     prefix=None,
     max_jobs=None,
-    check_timeleft=0.0,
+    check_timeleft=None,
 ):
     ## check in
     hostname = socket.gethostname()
@@ -73,7 +73,7 @@ def execute(
     while True:
         time.sleep(random.randint(0, 10))
 
-        if check_timeleft > 0:
+        if check_timeleft is not None and check_timeleft > 0:
             jobid = os.getenv("SLURM_JOB_ID", None)
             assert jobid is not None, "SLURM_JOB_ID not found in environment variables."
             cmd = f"squeue -h -j {jobid} -o %L"
