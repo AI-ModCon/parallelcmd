@@ -562,7 +562,7 @@ def initdb(args):
         # print("%d Total added." % (ntotal))
 
 
-def main(args):
+def exec(args):
     total, done = jobcount()
 
     if args.dashboard:
@@ -608,6 +608,31 @@ def main(args):
 
         mq.put((None, None, None))
         p.join()
+
+
+def run(args):
+    initdb(args)
+    exec(args)
+
+
+def add_default_run_subcommand(argv, subcommand_names):
+    if any(x in subcommand_names for x in argv):
+        return argv
+
+    idx = 0
+    while idx < len(argv):
+        token = argv[idx]
+        if token in ("--dbfile", "--log_level"):
+            idx += 2
+            continue
+        if token.startswith("--dbfile=") or token.startswith("--log_level="):
+            idx += 1
+            continue
+        break
+
+    out = list(argv)
+    out.insert(idx, "run")
+    return out
 
 
 if __name__ == "__main__":
@@ -666,7 +691,7 @@ if __name__ == "__main__":
 
     ## subcommand: exec
     parser = subparsers.add_parser("exec")
-    parser.set_defaults(func=main)
+    parser.set_defaults(func=exec)
     parser.add_argument(
         "-j", "--nworkers", type=int, help="Number of workers", default=4
     )
@@ -682,6 +707,30 @@ if __name__ == "__main__":
     )
     parser.add_argument("--check_timeleft", type=float, help="check timeleft (seconds)")
 
+    ## subcommand: run (init + exec)
+    parser = subparsers.add_parser("run")
+    parser.set_defaults(func=run)
+    parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
+    parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
+    parser.add_argument("-a", "--append", action="store_true", help="append")
+    parser.add_argument("-r", "--reverse", action="store_true", help="reverse")
+    parser.add_argument(
+        "--check_dup", action="store_true", help="allow duplicate commands"
+    )
+    parser.add_argument(
+        "-j", "--nworkers", type=int, help="Number of workers", default=4
+    )
+    parser.add_argument("--progress", action="store_true", help="print progress")
+    parser.add_argument("--dashboard", action="store_true", help="print only last line")
+    parser.add_argument("--dryrun", action="store_true", help="dryrun")
+    parser.add_argument("--timeskip", type=float, help="timeskip", default=0.0)
+    parser.add_argument("--randomorder", action="store_true", help="randomorder")
+    parser.add_argument("--prefix", help="command prefix")
+    parser.add_argument(
+        "--max_jobs", type=int, help="maximum number of jobs per process to run"
+    )
+    parser.add_argument("--check_timeleft", type=float, help="check timeleft (seconds)")
+
     ## subcommand: update
     parser = subparsers.add_parser("update")
     parser.add_argument("--replace", help="replace statement in the form of 'old,new'")
@@ -689,7 +738,8 @@ if __name__ == "__main__":
     parser.add_argument("--id", type=int, help="reset by id", nargs="+")
     parser.set_defaults(func=updatedb)
 
-    cmds = cmdlist(sys.argv[1:])
+    raw_argv = add_default_run_subcommand(sys.argv[1:], set(subparsers.choices.keys()))
+    cmds = cmdlist(raw_argv)
     args, _unknown = parser_main.parse_known_args(cmds[0])
     if len(_unknown) > 0:
         idx_list = [i for i, x in enumerate(cmds[0]) if x in subparsers.choices.keys()]

@@ -1,92 +1,233 @@
 # parallelcmd
 
+A lightweight Python CLI for queueing and executing shell commands in parallel. Inspired by GNU Parallel, `parallelcmd` provides:
+
+- **Command generation** from argument combinations
+- **Concurrent execution** with live output and progress tracking
+- **Job management**: inspect, reset, delete, and update queued jobs
+- **Flexible workflows**: resume, and scale workers on demand
 
 
-## Getting started
+## Requirements
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+- Python 3.8+
+- Standard library only (no external Python dependencies)
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## Quick start
 
-## Add your files
+From this directory:
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
-
+```bash
+python3 parallelcmd.py --help
 ```
-cd existing_repo
-git remote add origin https://code.ornl.gov/jyc/parallelcmd.git
-git branch -M main
-git push -uf origin main
+
+Create a job database:
+
+```bash
+python3 parallelcmd.py init "echo {}" ::: a b c
 ```
 
-## Integrate with your tools
+Run queued jobs with 4 workers:
 
-- [ ] [Set up project integrations](https://code.ornl.gov/jyc/parallelcmd/-/settings/integrations)
+```bash
+python3 parallelcmd.py exec -j 4 --progress
+```
 
-## Collaborate with your team
+Or do both in one command:
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+```bash
+python3 parallelcmd.py run -j 4 --progress "echo {}" ::: a b c
+```
 
-## Test and Deploy
+Check status:
 
-Use the built-in continuous integration in GitLab.
+```bash
+python3 parallelcmd.py check
+```
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+## Command model
 
-***
+`init` builds commands and stores them in `pardb.sqlite` (or `--dbfile`).
 
-# Editing this README
+- `:::` starts an inline argument list.
+- `::::` starts an argument list loaded from a file (one value per line; empty lines and `#` comments are ignored).
+- Multiple lists are combined with Cartesian product.
+- If the command has no `{}` placeholders, placeholders are appended automatically.
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Example:
 
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+```bash
+python3 parallelcmd.py init "python train.py --lr {} --seed {}" ::: 1e-3 1e-4 ::: 1 2 3
+```
 
-## Name
-Choose a self-explaining name for your project.
+This creates 6 jobs.
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+## Subcommands
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+### `init`
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+Initialize/append job queue.
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+```bash
+python3 parallelcmd.py init [options] <command ...> [ ::: <args ...> ]* [ :::: <argfile ...> ]*
+```
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+Options:
+- `-a, --append` append to existing table instead of recreating
+- `-r, --reverse` reverse insertion order
+- `--check_dup` skip commands that already exist
+- `-v, --verbose`
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### `exec`
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+Execute queued jobs in parallel.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```bash
+python3 parallelcmd.py exec [options]
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+Options:
+- `-j, --nworkers` number of workers (default: `4`)
+- `--progress` show aggregate progress line
+- `--dashboard` compact live dashboard mode
+- `--dryrun` print commands without running
+- `-v, --verbose`
+- `--timeskip <sec>` throttle displayed output updates
+- `--randomorder` fetch pending jobs in random order
+- `--prefix <cmd>` prefix each command (example: `srun -N1 -n1`)
+- `--max_jobs <n>` max jobs per worker
+- `--check_timeleft <sec>` stop taking new jobs when SLURM time left is below threshold
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+### `run`
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+Initialize and execute in one step (`init` + `exec`).
 
-## License
-For open source projects, say how it is licensed.
+```bash
+python3 parallelcmd.py run [init options] [exec options] <command ...> [ ::: <args ...> ]* [ :::: <argfile ...> ]*
+```
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Common options include:
+- init side: `--append`, `--reverse`, `--check_dup`
+- exec side: `-j/--nworkers`, `--progress`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--check_timeleft`
+
+### `check`
+
+Inspect queue summary or list all rows.
+
+```bash
+python3 parallelcmd.py check
+python3 parallelcmd.py check --list
+```
+
+### `reset`
+
+Reset selected jobs to pending (`Starttime`, `JobRuntime`, `Exitval` set to `NULL`).
+
+```bash
+python3 parallelcmd.py reset [--all | --like <pattern> | --id <id ...> | --where <sql>]
+```
+
+Prompts for confirmation before changing rows.
+
+### `delete`
+
+Delete selected jobs.
+
+```bash
+python3 parallelcmd.py delete [--all | --like <pattern> | --id <id ...>]
+```
+
+Prompts for confirmation before deleting rows.
+
+### `update`
+
+Find/replace command text for selected jobs.
+
+```bash
+python3 parallelcmd.py update --replace "old,new" [--like <pattern> | --id <id ...>]
+```
+
+Prompts for confirmation before updating rows.
+
+## Global options
+
+- `--dbfile <path>` SQLite DB path (default: `pardb.sqlite`)
+- `--log_level {debug,info}` logging level (default: `info`)
+
+## Useful examples
+
+Run scripts from values in a file:
+
+```bash
+python3 parallelcmd.py init "bash run_case.sh {}" :::: cases.txt
+python3 parallelcmd.py exec -j 8 --progress
+```
+
+Use a custom DB file:
+
+```bash
+python3 parallelcmd.py --dbfile jobs.sqlite init "echo {}" ::: x y z
+python3 parallelcmd.py --dbfile jobs.sqlite exec -j 2
+```
+
+Retry failed jobs only:
+
+```bash
+python3 parallelcmd.py reset
+python3 parallelcmd.py exec -j 4 --progress
+```
+
+## Notes
+
+- Job output is streamed to stdout while running.
+- Queue state is persisted in SQLite, so you can stop and resume workflows.
+- `reset`, `delete`, and `update` are interactive (confirmation required).
+
+## Troubleshooting
+
+- **`database is locked`**
+	- Usually temporary when multiple workers/processes access SQLite.
+	- Retry the command; avoid running multiple `exec` sessions against the same DB at once.
+
+- **No jobs are executed**
+	- Check queue state: `python3 parallelcmd.py check --list`.
+	- If jobs are already completed or marked in-progress, reset them: `python3 parallelcmd.py reset`.
+
+- **Unexpected shell behavior / quoting issues**
+	- Commands are executed through `bash -c`.
+	- Wrap complex commands in quotes and test one command manually before `init`.
+
+- **`--check_timeleft` fails with missing `SLURM_JOB_ID`**
+	- This option requires a SLURM job environment.
+	- Run inside a SLURM allocation or omit `--check_timeleft`.
+
+- **`update --replace` does not parse as expected**
+	- Use exactly one comma-separated pair: `--replace "old,new"`.
+	- If your text contains commas, run multiple updates with simpler replacement pairs.
+
+- **Argument file (`::::`) seems ignored**
+	- Ensure one argument per line.
+	- Blank lines and lines starting with `#` are intentionally skipped.
+
+## FAQ
+
+- **How do I resume after interruption?**
+	- Just run `python3 parallelcmd.py exec -j 4 --progress` again.
+	- Completed jobs (exit code `0`) stay done; pending jobs continue.
+
+- **How do I retry only failed jobs?**
+	- Failed jobs are those with non-zero exit values.
+	- Run `python3 parallelcmd.py reset` (default filter resets jobs with `Exitval <> 0`), then run `exec` again.
+
+- **Can I have multiple queues?**
+	- Yes. Use different DB files with `--dbfile`.
+	- Example: `python3 parallelcmd.py --dbfile exp1.sqlite init ...` then `exec` using the same `--dbfile`.
+
+- **Is it safe to run two `exec` commands on the same DB?**
+	- It is not recommended.
+	- SQLite coordination can work, but contention/locking increases and behavior is harder to reason about.
+
+- **Can I inspect/edit queued commands before running?**
+	- Inspect: `python3 parallelcmd.py check --list`
+	- Bulk edit text: `python3 parallelcmd.py update --replace "old,new" --like "%pattern%"`
+	- Remove unwanted rows: `python3 parallelcmd.py delete --id 12 13 14`
