@@ -616,6 +616,9 @@ def run(args):
 
 
 def add_default_run_subcommand(argv, subcommand_names):
+    if any(x in ("-h", "--help") for x in argv):
+        return argv
+
     if any(x in subcommand_names for x in argv):
         return argv
 
@@ -645,7 +648,7 @@ if __name__ == "__main__":
         # parser_args.print_help()
         sys.exit()
 
-    parser_main = argparse.ArgumentParser(prog="OPTIONS", add_help=False)
+    parser_main = argparse.ArgumentParser(prog="OPTIONS")
     parser_main.add_argument("--dbfile", help="dbfile", default="pardb.sqlite")
     parser_main.add_argument(
         "--log_level",
