@@ -154,7 +154,7 @@ def execute(
             with sqlite3.connect(dbfile) as con:
                 cur = con.cursor()
                 cur.execute(
-                    f"UPDATE parjob SET Host = '{hostname}', PID = {p.pid} WHERE Seq = {taskid};"
+                    f"UPDATE parjob SET Hostname = '{hostname}', PID = {p.pid} WHERE Seq = {taskid};"
                 )
                 con.commit()
 
@@ -318,21 +318,30 @@ def print_table(cur, rows, row_format):
         )
 
 
+def selectdb(cur, filter=None):
+    if filter is None:
+        filter = "1=1"
+
+    cur.execute(
+        "SELECT Seq, "
+        "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
+        "Hostname, PID, JobRuntime, Exitval, Command "
+        "FROM parjob "
+        f"WHERE {filter};"
+    )
+    rows = cur.fetchall()
+    row_format = " {:>4} {:<19} {:<15} {:>8} {:>11} {:>7} {:<80}"
+    print_table(cur, rows, row_format)
+    return rows
+
+
 def checkdb(args):
     with sqlite3.connect(dbfile) as con:
         # con.row_factory = sqlite3.Row
         cur = con.cursor()
         # cur.execute("SELECT count(1) as Total, sum(case when Exitval >= 0 then 1 else 0 end) as Finished FROM parjob")
         if args.list:
-            cur.execute(
-                "SELECT Seq, "
-                "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
-                "Host, PID, JobRuntime, Exitval, Command "
-                "FROM parjob;"
-            )
-            rows = cur.fetchall()
-            row_format = " {:>4} {:<19} {:<15} {:>8} {:>11} {:>7} {:<80}"
-            print_table(cur, rows, row_format)
+            selectdb(cur)
         else:
             cur.execute(
                 "SELECT count(1) as Total, "
@@ -360,17 +369,7 @@ def resetdb(args):
             filter = "Seq IN (%s)" % ",".join(map(str, args.id))
 
         cur = con.cursor()
-        cur.execute(
-            "SELECT Seq, "
-            "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
-            "Host, PID, JobRuntime, Exitval, Command "
-            "FROM parjob "
-            f"WHERE {filter};"
-        )
-        rows = cur.fetchall()
-        row_format = " {:>4} {:<19} {:<15} {:>8} {:>11} {:>7} {:<80}"
-        print_table(cur, rows, row_format)
-
+        rows = selectdb(cur, filter)
         # (count,) = cur.fetchone()
         count = len(rows)
         ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
@@ -378,7 +377,7 @@ def resetdb(args):
             cur.execute(
                 f"UPDATE parjob SET Starttime = NULL, JobRuntime = NULL, Exitval = NULL WHERE {filter};"
             )
-            print("Rset:", cur.rowcount)
+            print("Reset:", cur.rowcount)
             con.commit()
         else:
             print("Aborted.")
@@ -397,20 +396,9 @@ def deletedb(args):
             filter = "Seq IN (%s)" % ",".join(map(str, args.id))
 
         cur = con.cursor()
-        cur.execute(
-            "SELECT Seq, "
-            "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
-            "Host, PID, JobRuntime, Exitval, Command "
-            "FROM parjob "
-            f"WHERE {filter};"
-        )
-        rows = cur.fetchall()
-        row_format = " {:>4} {:<19} {:<15} {:>8} {:>11} {:>7} {:<80}"
-        print_table(cur, rows, row_format)
-
-        # (count,) = cur.fetchone()
+        rows = selectdb(cur, filter)
         count = len(rows)
-        ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
+        ans = input("%d number of rows will be deleted. Continue? (Y/N): " % count)
         if ans == "Y" or ans == "y":
             cur.execute(f"DELETE FROM parjob WHERE {filter};")
             print("Delete:", cur.rowcount)
@@ -430,16 +418,7 @@ def updatedb(args):
             filter = "Seq IN (%s)" % ",".join(map(str, args.id))
 
         cur = con.cursor()
-        cur.execute(
-            "SELECT Seq, "
-            "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
-            "Host, PID, JobRuntime, Exitval, Command "
-            "FROM parjob "
-            f"WHERE {filter};"
-        )
-        rows = cur.fetchall()
-        row_format = " {:>4} {:<19} {:<15} {:>8} {:>11} {:>7} {:<80}"
-        print_table(cur, rows, row_format)
+        rows = selectdb(cur, filter)
         replace_a, replace_b = args.replace.split(",")
         for row in rows:
             cmd = row[-1]
@@ -507,18 +486,12 @@ def initdb(args):
             sql = (
                 "CREATE TABLE IF NOT EXISTS parjob ("
                 "  Seq INTEGER PRIMARY KEY AUTOINCREMENT,"
-                "  Host TEXT,"
+                "  Hostname TEXT,"
                 "  PID INT,"
                 "  Starttime FLOAT(44),"
                 "  JobRuntime FLOAT(44),"
-                "  Send BIGINT,"
-                "  Receive BIGINT,"
                 "  Exitval BIGINT,"
-                "  _Signal BIGINT,"
-                "  Command TEXT,"
-                "  V1 TEXT,"
-                "  Stdout TEXT,"
-                "  Stderr TEXT);"
+                "  Command TEXT);"
             )
             cur.execute(sql)
             print("%s created" % (dbfile))
