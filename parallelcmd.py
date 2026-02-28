@@ -151,6 +151,13 @@ def execute(
             with active.get_lock():
                 active_ps[workerid] = p
 
+            with sqlite3.connect(dbfile) as con:
+                cur = con.cursor()
+                cur.execute(
+                    f"UPDATE parjob SET Host = '{hostname}', PID = {p.pid} WHERE Seq = {taskid};"
+                )
+                con.commit()
+
             try:
                 for line in iter(p.stdout.readline, ""):
                     mq.put((workerid, taskid, line))
@@ -295,6 +302,22 @@ def progress(done, total, dashboard=False, progress=False, timeskip=0.0):
                     pass
 
 
+def print_table(cur, rows, row_format):
+    colnames = [desc[0] for desc in cur.description]
+    bars = ["-" * len(desc[0]) for desc in cur.description]
+    print(row_format.format(*colnames))
+    print(row_format.format(*bars))
+    for row in rows:
+        print(
+            row_format.format(
+                *map(
+                    lambda x: str(x) if not isinstance(x, float) else "%.2f" % x,
+                    row,
+                )
+            )
+        )
+
+
 def checkdb(args):
     with sqlite3.connect(dbfile) as con:
         # con.row_factory = sqlite3.Row
@@ -304,26 +327,12 @@ def checkdb(args):
             cur.execute(
                 "SELECT Seq, "
                 "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
-                "JobRuntime, Exitval, Command "
+                "Host, PID, JobRuntime, Exitval, Command "
                 "FROM parjob;"
             )
             rows = cur.fetchall()
-            format = " {:>4} {:<19} {:>9} {:>7} {:<80}"
-            colnames = [desc[0] for desc in cur.description]
-            bars = ["-" * len(desc[0]) for desc in cur.description]
-            print(format.format(*colnames))
-            print(format.format(*bars))
-            for row in rows:
-                print(
-                    format.format(
-                        *map(
-                            lambda x: (
-                                str(x) if not isinstance(x, float) else "%.2f" % x
-                            ),
-                            row,
-                        )
-                    )
-                )
+            row_format = " {:>4} {:<19} {:<15} {:>8} {:>11} {:>7} {:<80}"
+            print_table(cur, rows, row_format)
         else:
             cur.execute(
                 "SELECT count(1) as Total, "
@@ -332,12 +341,8 @@ def checkdb(args):
                 "FROM parjob;"
             )
             row = cur.fetchone()
-            format = " {:>5} {:>10} {:>8}"
-            colnames = [desc[0] for desc in cur.description]
-            bars = ["-" * len(desc[0]) for desc in cur.description]
-            print(format.format(*colnames))
-            print(format.format(*bars))
-            print(format.format(*map(lambda x: str(x), row)))
+            row_format = " {:>5} {:>10} {:>8}"
+            print_table(cur, [row], row_format)
 
 
 def resetdb(args):
@@ -358,25 +363,13 @@ def resetdb(args):
         cur.execute(
             "SELECT Seq, "
             "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
-            "JobRuntime, Exitval, Command "
+            "Host, PID, JobRuntime, Exitval, Command "
             "FROM parjob "
             f"WHERE {filter};"
         )
         rows = cur.fetchall()
-        format = " {:>4} {:<19} {:>9} {:>7} {:<80}"
-        colnames = [desc[0] for desc in cur.description]
-        bars = ["-" * len(desc[0]) for desc in cur.description]
-        print(format.format(*colnames))
-        print(format.format(*bars))
-        for row in rows:
-            print(
-                format.format(
-                    *map(
-                        lambda x: str(x) if not isinstance(x, float) else "%.2f" % x,
-                        row,
-                    )
-                )
-            )
+        row_format = " {:>4} {:<19} {:<15} {:>8} {:>11} {:>7} {:<80}"
+        print_table(cur, rows, row_format)
 
         # (count,) = cur.fetchone()
         count = len(rows)
@@ -407,25 +400,13 @@ def deletedb(args):
         cur.execute(
             "SELECT Seq, "
             "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
-            "JobRuntime, Exitval, Command "
+            "Host, PID, JobRuntime, Exitval, Command "
             "FROM parjob "
             f"WHERE {filter};"
         )
         rows = cur.fetchall()
-        format = " {:>4} {:<19} {:>9} {:>7} {:<80}"
-        colnames = [desc[0] for desc in cur.description]
-        bars = ["-" * len(desc[0]) for desc in cur.description]
-        print(format.format(*colnames))
-        print(format.format(*bars))
-        for row in rows:
-            print(
-                format.format(
-                    *map(
-                        lambda x: str(x) if not isinstance(x, float) else "%.2f" % x,
-                        row,
-                    )
-                )
-            )
+        row_format = " {:>4} {:<19} {:<15} {:>8} {:>11} {:>7} {:<80}"
+        print_table(cur, rows, row_format)
 
         # (count,) = cur.fetchone()
         count = len(rows)
@@ -452,23 +433,20 @@ def updatedb(args):
         cur.execute(
             "SELECT Seq, "
             "datetime(Starttime, 'unixepoch', 'localtime') as Starttime, "
-            "JobRuntime, Exitval, Command "
+            "Host, PID, JobRuntime, Exitval, Command "
             "FROM parjob "
             f"WHERE {filter};"
         )
         rows = cur.fetchall()
-        format = " {:>4} {:<19} {:>9} {:>7} {:<80}"
-        colnames = [desc[0] for desc in cur.description]
-        bars = ["-" * len(desc[0]) for desc in cur.description]
-        print(format.format(*colnames))
-        print(format.format(*bars))
+        row_format = " {:>4} {:<19} {:<15} {:>8} {:>11} {:>7} {:<80}"
+        print_table(cur, rows, row_format)
         replace_a, replace_b = args.replace.split(",")
         for row in rows:
             cmd = row[-1]
             new_cmd = cmd.replace(replace_a, replace_b)
 
             print(
-                format.format(
+                row_format.format(
                     *map(
                         lambda x: str(x) if not isinstance(x, float) else "%.2f" % x,
                         row,
@@ -530,6 +508,7 @@ def initdb(args):
                 "CREATE TABLE IF NOT EXISTS parjob ("
                 "  Seq INTEGER PRIMARY KEY AUTOINCREMENT,"
                 "  Host TEXT,"
+                "  PID INT,"
                 "  Starttime FLOAT(44),"
                 "  JobRuntime FLOAT(44),"
                 "  Send BIGINT,"
