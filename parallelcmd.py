@@ -375,7 +375,7 @@ def resetdb(args):
         ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
         if ans == "Y" or ans == "y":
             cur.execute(
-                f"UPDATE parjob SET Starttime = NULL, JobRuntime = NULL, Exitval = NULL WHERE {filter};"
+                f"UPDATE parjob SET Starttime = NULL, Hostname = NULL, PID = NULL, JobRuntime = NULL, Exitval = NULL WHERE {filter};"
             )
             print("Reset:", cur.rowcount)
             con.commit()
@@ -486,9 +486,9 @@ def initdb(args):
             sql = (
                 "CREATE TABLE IF NOT EXISTS parjob ("
                 "  Seq INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  Starttime FLOAT(44),"
                 "  Hostname TEXT,"
                 "  PID INT,"
-                "  Starttime FLOAT(44),"
                 "  JobRuntime FLOAT(44),"
                 "  Exitval BIGINT,"
                 "  Command TEXT);"
