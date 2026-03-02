@@ -337,20 +337,31 @@ def selectdb(cur, filter=None):
 
 def checkdb(args):
     with sqlite3.connect(dbfile) as con:
+        filter = "1=1"
+        if args.where is not None:
+            filter = f"{args.where}"
+        if args.like is not None:
+            filter = f"Command LIKE '{args.like}'"
+        if args.id:
+            if not isinstance(args.id, list):
+                args.id = [args.id]
+            filter = "Seq IN (%s)" % ",".join(map(str, args.id))
+
         # con.row_factory = sqlite3.Row
         cur = con.cursor()
         # cur.execute("SELECT count(1) as Total, sum(case when Exitval >= 0 then 1 else 0 end) as Finished FROM parjob")
         if args.list:
-            selectdb(cur)
+            selectdb(cur, filter)
         else:
             cur.execute(
                 "SELECT count(1) as Total, "
                 "sum(case when Exitval == -1000 then 1 else 0 end) as Processing, "
-                "sum(case when Exitval >= 0 then 1 else 0 end) as Finished "
+                "sum(case when Exitval >= 0 then 1 else 0 end) as Finished, "
+                "sum(case when Exitval > 0 then 1 else 0 end) as 'Nonzero Exit' "
                 "FROM parjob;"
             )
             row = cur.fetchone()
-            row_format = " {:>5} {:>10} {:>8}"
+            row_format = " {:>5} {:>10} {:>8} {:>12}"
             print_table(cur, [row], row_format)
 
 
@@ -616,6 +627,9 @@ if __name__ == "__main__":
     ## subcommand: check
     parser = subparsers.add_parser("check")
     parser.add_argument("-l", "--list", action="store_true", help="list")
+    parser.add_argument("--where", help="where statement")
+    parser.add_argument("--like", help="like statement")
+    parser.add_argument("--id", type=int, help="select by id", nargs="+")
     parser.set_defaults(func=checkdb)
 
     ## subcommand: reset
