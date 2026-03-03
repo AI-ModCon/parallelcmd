@@ -27,10 +27,43 @@ slot = dict()
 active_ps = dict()
 active = mp.Value("i", 0)
 dbfile = "pardb.sqlite"
+db_retries = 10
+db_retry_delay = 0.2
 
 
 def log(*args, sep=" "):
     logging.debug(sep.join(map(str, args)))
+
+
+def is_sqlite_lock_error(exc: Exception) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and any(
+        token in str(exc).lower() for token in ("locked", "busy")
+    )
+
+
+def execute_sql_with_retry(con, sql, params=None, retries=None, retry_delay=None):
+    max_retries = db_retries if retries is None else retries
+    delay = db_retry_delay if retry_delay is None else retry_delay
+    last_exc = None
+    for attempt in range(max_retries):
+        try:
+            cur = con.cursor()
+            if params is None:
+                cur.execute(sql)
+            else:
+                cur.execute(sql, params)
+            return cur
+        except Exception as e:
+            last_exc = e
+            if is_sqlite_lock_error(e) and attempt < max_retries - 1:
+                try:
+                    con.rollback()
+                except Exception:
+                    pass
+                time.sleep(delay)
+                continue
+            raise
+    raise last_exc
 
 
 def hello(counter: mp.Value):
@@ -152,9 +185,9 @@ def execute(
                 active_ps[workerid] = p
 
             with sqlite3.connect(dbfile) as con:
-                cur = con.cursor()
-                cur.execute(
-                    f"UPDATE parjob SET Hostname = '{hostname}', PID = {p.pid} WHERE Seq = {taskid};"
+                execute_sql_with_retry(
+                    con,
+                    f"UPDATE parjob SET Hostname = '{hostname}', PID = {p.pid} WHERE Seq = {taskid};",
                 )
                 con.commit()
 
@@ -177,9 +210,9 @@ def execute(
                 print("%d: Done:" % taskid, p.returncode)
 
             with sqlite3.connect(dbfile) as con:
-                cur = con.cursor()
-                cur.execute(
-                    f"UPDATE parjob SET Exitval = {p.returncode}, JobRuntime = {runtime} WHERE Seq = {taskid};"
+                execute_sql_with_retry(
+                    con,
+                    f"UPDATE parjob SET Exitval = {p.returncode}, JobRuntime = {runtime} WHERE Seq = {taskid};",
                 )
                 con.commit()
             finished += 1
@@ -385,8 +418,9 @@ def resetdb(args):
         count = len(rows)
         ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
         if ans == "Y" or ans == "y":
-            cur.execute(
-                f"UPDATE parjob SET Starttime = NULL, Hostname = NULL, PID = NULL, JobRuntime = NULL, Exitval = NULL WHERE {filter};"
+            cur = execute_sql_with_retry(
+                con,
+                f"UPDATE parjob SET Starttime = NULL, Hostname = NULL, PID = NULL, JobRuntime = NULL, Exitval = NULL WHERE {filter};",
             )
             print("Reset:", cur.rowcount)
             con.commit()
@@ -411,7 +445,7 @@ def deletedb(args):
         count = len(rows)
         ans = input("%d number of rows will be deleted. Continue? (Y/N): " % count)
         if ans == "Y" or ans == "y":
-            cur.execute(f"DELETE FROM parjob WHERE {filter};")
+            cur = execute_sql_with_retry(con, f"DELETE FROM parjob WHERE {filter};")
             print("Delete:", cur.rowcount)
             con.commit()
         else:
@@ -455,8 +489,8 @@ def updatedb(args):
                 cmd = row[-1]
                 new_cmd = cmd.replace(replace_a, replace_b)
 
-                cur.execute(
-                    "UPDATE parjob SET Command = ? WHERE Seq = ?;", (new_cmd, seq)
+                cur = execute_sql_with_retry(
+                    con, "UPDATE parjob SET Command = ? WHERE Seq = ?;", (new_cmd, seq)
                 )
                 affected_rowcount += cur.rowcount
 
@@ -516,7 +550,7 @@ def initdb(args):
                 print("Already exists. Skip:", cmd)
             else:
                 sql = "INSERT INTO parjob (Command) VALUES ('%s');" % (cmd,)
-                cur.execute(sql)
+                cur = execute_sql_with_retry(con, sql)
                 inserted_rows += cur.rowcount
         con.commit()
         print("%d tasks added." % (inserted_rows))
@@ -613,6 +647,12 @@ if __name__ == "__main__":
 
     parser_main = argparse.ArgumentParser(prog="OPTIONS")
     parser_main.add_argument("--dbfile", help="dbfile", default="pardb.sqlite")
+    parser_main.add_argument(
+        "--db_retries",
+        type=int,
+        default=10,
+        help="Max retries when SQLite database is locked",
+    )
     parser_main.add_argument(
         "--log_level",
         choices=["debug", "info"],
@@ -731,6 +771,7 @@ if __name__ == "__main__":
     log("Python info:", sys.version)
 
     dbfile = args.dbfile
+    db_retries = max(1, args.db_retries)
 
     if args.command is None:
         usage()
