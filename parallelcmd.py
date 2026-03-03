@@ -56,6 +56,10 @@ def execute_sql_with_retry(con, sql, params=None, retries=None, retry_delay=None
         except Exception as e:
             last_exc = e
             if is_sqlite_lock_error(e) and attempt < max_retries - 1:
+                log(
+                    f"SQLite locked/busy. Retry {attempt + 1}/{max_retries} in {delay:.2f}s:",
+                    e,
+                )
                 try:
                     con.rollback()
                 except Exception:
