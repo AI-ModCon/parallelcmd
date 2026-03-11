@@ -394,11 +394,11 @@ def checkdb(args):
                 "SELECT count(1) as Total, "
                 "sum(case when Exitval == -1000 then 1 else 0 end) as Processing, "
                 "sum(case when Exitval >= 0 then 1 else 0 end) as Finished, "
-                "sum(case when Exitval > 0 then 1 else 0 end) as 'Nonzero Exit' "
+                "sum(case when Exitval > 0 then 1 else 0 end) as 'Nonzero' "
                 "FROM parjob;"
             )
             row = cur.fetchone()
-            row_format = " {:>5} {:>10} {:>8} {:>12}"
+            row_format = " {:>5} {:>10} {:>8} {:>7}"
             print_table(cur, [row], row_format)
 
 
