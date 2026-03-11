@@ -367,7 +367,7 @@ def selectdb(cur, filter=None):
         f"WHERE {filter};"
     )
     rows = cur.fetchall()
-    row_format = " {:>4} {:<22} {:<15} {:>8} {:>11} {:>7} {:<80}"
+    row_format = " {:>4} {:<19} {:<22} {:>8} {:>11} {:>7} {:<80}"
     print_table(cur, rows, row_format)
     return rows
 
