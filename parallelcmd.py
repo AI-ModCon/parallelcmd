@@ -369,7 +369,7 @@ def selectdb(cur, filter=None):
     rows = cur.fetchall()
     row_format = " {:>4} {:<19} {:<22} {:>8} {:>11} {:>7} {:<80}"
     print_table(cur, rows, row_format)
-    return rows
+    return rows, row_format
 
 
 def checkdb(args):
@@ -417,7 +417,7 @@ def resetdb(args):
             filter = "Seq IN (%s)" % ",".join(map(str, args.id))
 
         cur = con.cursor()
-        rows = selectdb(cur, filter)
+        rows, row_format = selectdb(cur, filter)
         # (count,) = cur.fetchone()
         count = len(rows)
         ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
@@ -445,7 +445,7 @@ def deletedb(args):
             filter = "Seq IN (%s)" % ",".join(map(str, args.id))
 
         cur = con.cursor()
-        rows = selectdb(cur, filter)
+        rows, row_format = selectdb(cur, filter)
         count = len(rows)
         ans = input("%d number of rows will be deleted. Continue? (Y/N): " % count)
         if ans == "Y" or ans == "y":
@@ -467,7 +467,7 @@ def updatedb(args):
             filter = "Seq IN (%s)" % ",".join(map(str, args.id))
 
         cur = con.cursor()
-        rows = selectdb(cur, filter)
+        rows, row_format = selectdb(cur, filter)
         replace_a, replace_b = args.replace.split(",")
         for row in rows:
             cmd = row[-1]
