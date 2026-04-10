@@ -100,6 +100,7 @@ def execute(
     prefix=None,
     max_jobs=None,
     check_timeleft=None,
+    wait_interval=None,
 ):
     ## check in
     hostname = socket.gethostname()
@@ -164,6 +165,13 @@ def execute(
                     pass
 
         if nomorejob:
+            if wait_interval is not None and wait_interval > 0:
+                print(
+                    f"{slot[workerid]}: No job available. Waiting {wait_interval}s before retry..."
+                )
+                time.sleep(wait_interval)
+                nomorejob = False
+                continue
             break
 
         bashcmd = "bash -c '%s'" % cmd
@@ -601,6 +609,7 @@ def exec(args):
                 prefix=args.prefix,
                 max_jobs=args.max_jobs,
                 check_timeleft=args.check_timeleft,
+                wait_interval=args.wait,
             )
             future_list.append(future)
 
@@ -719,6 +728,13 @@ if __name__ == "__main__":
         "--max_jobs", type=int, help="maximum number of jobs per process to run"
     )
     parser.add_argument("--check_timeleft", type=float, help="check timeleft (seconds)")
+    parser.add_argument(
+        "--wait",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="wait SECONDS and retry when no job is available (default: exit immediately)",
+    )
 
     ## subcommand: run (init + exec)
     parser = subparsers.add_parser("run")
@@ -743,6 +759,13 @@ if __name__ == "__main__":
         "--max_jobs", type=int, help="maximum number of jobs per process to run"
     )
     parser.add_argument("--check_timeleft", type=float, help="check timeleft (seconds)")
+    parser.add_argument(
+        "--wait",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="wait SECONDS and retry when no job is available (default: exit immediately)",
+    )
 
     ## subcommand: update
     parser = subparsers.add_parser("update")
