@@ -513,6 +513,9 @@ def updatedb(args):
 
 
 def initdb(args):
+    if args.append and args.force:
+        raise SystemExit("--append and --force cannot be used together.")
+
     cmds = cmdlist(sys.argv[1:])
     args_list = cmds[1:]
     cmd = " ".join(args.cmd)
@@ -526,20 +529,26 @@ def initdb(args):
         fullcmd = cmd.format(*argpair)
         task_list.append((i, fullcmd))
 
-    if args.reverse:
-        task_list.reverse()
-
     with sqlite3.connect(dbfile) as con:
         cur = con.cursor()
-        if not args.append:
-            try:
-                sql = "DROP TABLE parjob;"
-                cur.execute(sql)
-            except:
-                pass
+        # Enable WAL mode
+        cur.execute("PRAGMA journal_mode=WAL;")
+        cur.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'parjob';"
+        )
+        table_exists = cur.fetchone() is not None
 
-            # Enable WAL mode
-            cur.execute("PRAGMA journal_mode=WAL;")
+        if table_exists and args.force:
+            cur.execute("DROP TABLE parjob;")
+            table_exists = False
+
+        if table_exists and not args.append:
+            raise SystemExit(
+                "parjob table already exists in %s. Use --append to add tasks to the existing queue."
+                % (dbfile,)
+            )
+
+        if not table_exists:
             sql = (
                 "CREATE TABLE IF NOT EXISTS parjob ("
                 "  Seq INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -706,7 +715,7 @@ if __name__ == "__main__":
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("-a", "--append", action="store_true", help="append")
-    parser.add_argument("-r", "--reverse", action="store_true", help="reverse")
+    parser.add_argument("--force", action="store_true", help="overwrite existing table")
     parser.add_argument(
         "--check_dup", action="store_true", help="allow duplicate commands"
     )
@@ -742,7 +751,7 @@ if __name__ == "__main__":
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("-a", "--append", action="store_true", help="append")
-    parser.add_argument("-r", "--reverse", action="store_true", help="reverse")
+    parser.add_argument("--force", action="store_true", help="overwrite existing table")
     parser.add_argument(
         "--check_dup", action="store_true", help="allow duplicate commands"
     )

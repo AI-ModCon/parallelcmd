@@ -74,7 +74,7 @@ python3 parallelcmd.py init [options] <command ...> [ ::: <args ...> ]* [ :::: <
 
 Options:
 - `-a, --append` append to existing table instead of recreating
-- `-r, --reverse` reverse insertion order
+- `--force` drop the existing `parjob` table and recreate it
 - `--check_dup` skip commands that already exist
 - `-v, --verbose`
 
@@ -107,7 +107,7 @@ python3 parallelcmd.py run [init options] [exec options] <command ...> [ ::: <ar
 ```
 
 Common options include:
-- init side: `--append`, `--reverse`, `--check_dup`
+- init side: `--append`, `--force`, `--check_dup`
 - exec side: `-j/--nworkers`, `--progress`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--check_timeleft`
 
 ### `check`
