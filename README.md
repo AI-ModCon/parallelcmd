@@ -39,6 +39,12 @@ Or do both in one command:
 python3 parallelcmd.py run -j 4 --progress "echo {}" ::: a b c
 ```
 
+If you omit the subcommand entirely, `parallelcmd.py` defaults to `run`:
+
+```bash
+python3 parallelcmd.py -j 4 --progress "echo {}" ::: a b c
+```
+
 Check status:
 
 ```bash
@@ -47,7 +53,7 @@ python3 parallelcmd.py check
 
 ## Command model
 
-`init` builds commands and stores them in `pardb.sqlite` (or `--dbfile`).
+`init` builds commands and stores them in `pardb.sqlite` by default. Use `--db <name>` to target `<name>.sqlite`, or set the `PARDB` environment variable.
 
 - `:::` starts an inline argument list.
 - `::::` starts an argument list loaded from a file (one value per line; empty lines and `#` comments are ignored).
@@ -74,7 +80,7 @@ python3 parallelcmd.py init [options] <command ...> [ ::: <args ...> ]* [ :::: <
 
 Options:
 - `-a, --append` append to existing table instead of recreating
-- `--force` drop the existing `parjob` table and recreate it
+- `-f, --force` drop the existing `parjob` table and recreate it
 - `--check_dup` skip commands that already exist
 - `-v, --verbose`
 
@@ -97,6 +103,7 @@ Options:
 - `--prefix <cmd>` prefix each command (example: `srun -N1 -n1`)
 - `--max_jobs <n>` max jobs per worker
 - `--check_timeleft <sec>` stop taking new jobs when SLURM time left is below threshold
+- `--wait <sec>` keep polling for new jobs instead of exiting when the queue is temporarily empty
 
 ### `run`
 
@@ -107,8 +114,8 @@ python3 parallelcmd.py run [init options] [exec options] <command ...> [ ::: <ar
 ```
 
 Common options include:
-- init side: `--append`, `--force`, `--check_dup`
-- exec side: `-j/--nworkers`, `--progress`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--check_timeleft`
+- init side: `--append`, `-f/--force`, `--check_dup`
+- exec side: `-j/--nworkers`, `--progress`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--check_timeleft`, `--wait`
 
 ### `check`
 
@@ -151,7 +158,7 @@ Prompts for confirmation before updating rows.
 
 ## Global options
 
-- `--dbfile <path>` SQLite DB path (default: `pardb.sqlite`)
+- `--db <name>` SQLite DB basename; the file on disk is `<name>.sqlite`
 - `--log_level {debug,info}` logging level (default: `info`)
 
 ## Useful examples
@@ -166,8 +173,15 @@ python3 parallelcmd.py exec -j 8 --progress
 Use a custom DB file:
 
 ```bash
-python3 parallelcmd.py --dbfile jobs.sqlite init "echo {}" ::: x y z
-python3 parallelcmd.py --dbfile jobs.sqlite exec -j 2
+python3 parallelcmd.py --db jobs init "echo {}" ::: x y z
+python3 parallelcmd.py --db jobs exec -j 2
+```
+
+Keep workers alive while another process appends jobs later:
+
+```bash
+python3 parallelcmd.py exec -j 4 --wait 10
+python3 parallelcmd.py init -a "echo {}" ::: later1 later2
 ```
 
 Retry failed jobs only:
@@ -182,6 +196,7 @@ python3 parallelcmd.py exec -j 4 --progress
 - Job output is streamed to stdout while running.
 - Queue state is persisted in SQLite, so you can stop and resume workflows.
 - `reset`, `delete`, and `update` are interactive (confirmation required).
+- With `--wait`, workers poll for newly appended jobs instead of exiting as soon as the queue is empty.
 
 ## Troubleshooting
 
@@ -192,6 +207,10 @@ python3 parallelcmd.py exec -j 4 --progress
 - **No jobs are executed**
 	- Check queue state: `python3 parallelcmd.py check --list`.
 	- If jobs are already completed or marked in-progress, reset them: `python3 parallelcmd.py reset`.
+
+- **Workers exit before later jobs are appended**
+	- Start `exec` with `--wait <seconds>` so workers keep polling.
+	- Append work with `init -a ...` from another process or terminal.
 
 - **Unexpected shell behavior / quoting issues**
 	- Commands are executed through `bash -c`.
@@ -220,8 +239,8 @@ python3 parallelcmd.py exec -j 4 --progress
 	- Run `python3 parallelcmd.py reset` (default filter resets jobs with `Exitval <> 0`), then run `exec` again.
 
 - **Can I have multiple queues?**
-	- Yes. Use different DB files with `--dbfile`.
-	- Example: `python3 parallelcmd.py --dbfile exp1.sqlite init ...` then `exec` using the same `--dbfile`.
+	- Yes. Use different database basenames with `--db`.
+	- Example: `python3 parallelcmd.py --db exp1 init ...` then `exec` using the same `--db`.
 
 - **Is it safe to run two `exec` commands on the same DB?**
 	- It is not recommended.

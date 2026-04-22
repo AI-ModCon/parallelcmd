@@ -26,7 +26,8 @@ mq = queue.Queue()
 slot = dict()
 active_ps = dict()
 active = mp.Value("i", 0)
-dbfile = "pardb.sqlite"
+dbname = "pardb" if os.getenv("PARDB") is None else os.getenv("PARDB")
+dbfile = dbname + ".sqlite"
 db_retries = 10
 db_retry_delay = 0.2
 
@@ -644,10 +645,10 @@ def add_default_run_subcommand(argv, subcommand_names):
     idx = 0
     while idx < len(argv):
         token = argv[idx]
-        if token in ("--dbfile", "--log_level"):
+        if token in ("--db", "--log_level"):
             idx += 2
             continue
-        if token.startswith("--dbfile=") or token.startswith("--log_level="):
+        if token.startswith("--db=") or token.startswith("--log_level="):
             idx += 1
             continue
         break
@@ -668,7 +669,7 @@ if __name__ == "__main__":
         sys.exit()
 
     parser_main = argparse.ArgumentParser(prog="OPTIONS")
-    parser_main.add_argument("--dbfile", help="dbfile", default="pardb.sqlite")
+    parser_main.add_argument("--db", help="DB name")
     parser_main.add_argument(
         "--db_retries",
         type=int,
@@ -715,7 +716,7 @@ if __name__ == "__main__":
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("-a", "--append", action="store_true", help="append")
-    parser.add_argument("--force", action="store_true", help="overwrite existing table")
+    parser.add_argument("-f", "--force", action="store_true", help="overwrite existing table")
     parser.add_argument(
         "--check_dup", action="store_true", help="allow duplicate commands"
     )
@@ -751,7 +752,7 @@ if __name__ == "__main__":
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("-a", "--append", action="store_true", help="append")
-    parser.add_argument("--force", action="store_true", help="overwrite existing table")
+    parser.add_argument("-f", "--force", action="store_true", help="overwrite existing table")
     parser.add_argument(
         "--check_dup", action="store_true", help="allow duplicate commands"
     )
@@ -806,7 +807,10 @@ if __name__ == "__main__":
     log("Python version:", ".".join(map(str, sys.version_info[:3])))
     log("Python info:", sys.version)
 
-    dbfile = args.dbfile
+    if args.db is not None:
+        dbname = args.db
+        dbfile = dbname + ".sqlite"
+
     db_retries = max(1, args.db_retries)
 
     if args.command is None:
