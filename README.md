@@ -103,36 +103,59 @@ Options:
 - `--prefix <cmd>` prefix each command (example: `srun -N1 -n1`)
 - `--max_jobs <n>` max jobs per worker
 - `--check_timeleft <sec>` stop taking new jobs when SLURM time left is below threshold
-- `--wait <sec>` keep polling for new jobs instead of exiting when the queue is temporarily empty
+- `--wait <sec>` when no job is available, wait this many seconds and retry instead of exiting (useful when another process is still adding jobs)
 
 ### `run`
 
 Initialize and execute in one step (`init` + `exec`).
 
 ```bash
-python3 parallelcmd.py run [init options] [exec options] <command ...> [ ::: <args ...> ]* [ :::: <argfile ...> ]*
+python3 parallelcmd.py run [options] <command ...> [ ::: <args ...> ]* [ :::: <argfile ...> ]*
 ```
 
-Common options include:
-- init side: `--append`, `-f/--force`, `--check_dup`
-- exec side: `-j/--nworkers`, `--progress`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--check_timeleft`, `--wait`
+Options:
+- `-a, --append` append to existing table instead of recreating
+- `-f, --force` drop the existing `parjob` table and recreate it
+- `--check_dup` skip commands that already exist
+- `-j, --nworkers` number of workers (default: `4`)
+- `--progress` show aggregate progress line
+- `--dashboard` compact live dashboard mode
+- `--dryrun` print commands without running
+- `--timeskip <sec>` throttle displayed output updates
+- `--randomorder` fetch pending jobs in random order
+- `--prefix <cmd>` prefix each command (example: `srun -N1 -n1`)
+- `--max_jobs <n>` max jobs per worker
+- `--check_timeleft <sec>` stop taking new jobs when SLURM time left is below threshold
+- `--wait <sec>` when no job is available, wait this many seconds and retry instead of exiting
+- `-v, --verbose`
 
 ### `check`
 
 Inspect queue summary or list all rows.
 
 ```bash
-python3 parallelcmd.py check
-python3 parallelcmd.py check --list
+python3 parallelcmd.py check [options]
 ```
+
+Options:
+- `-l, --list` list all rows
+- `--where <sql>` filter by raw SQL WHERE clause on command text
+- `--like <pattern>` filter by SQL LIKE pattern on command text
+- `--id <id ...>` filter by job ID(s)
 
 ### `reset`
 
 Reset selected jobs to pending (`Starttime`, `JobRuntime`, `Exitval` set to `NULL`).
 
 ```bash
-python3 parallelcmd.py reset [--all | --like <pattern> | --id <id ...> | --where <sql>]
+python3 parallelcmd.py reset [options]
 ```
+
+Options:
+- `-a, --all` reset all jobs
+- `--like <pattern>` filter by SQL LIKE pattern on command text
+- `--where <sql>` filter by raw SQL WHERE clause on command text
+- `--id <id ...>` filter by job ID(s)
 
 Prompts for confirmation before changing rows.
 
@@ -141,8 +164,13 @@ Prompts for confirmation before changing rows.
 Delete selected jobs.
 
 ```bash
-python3 parallelcmd.py delete [--all | --like <pattern> | --id <id ...>]
+python3 parallelcmd.py delete [options]
 ```
+
+Options:
+- `-a, --all` delete all jobs
+- `--like <pattern>` filter by SQL LIKE pattern on command text
+- `--id <id ...>` filter by job ID(s)
 
 Prompts for confirmation before deleting rows.
 
@@ -151,14 +179,20 @@ Prompts for confirmation before deleting rows.
 Find/replace command text for selected jobs.
 
 ```bash
-python3 parallelcmd.py update --replace "old,new" [--like <pattern> | --id <id ...>]
+python3 parallelcmd.py update [options]
 ```
+
+Options:
+- `--replace "old,new"` find and replace text pair (comma-separated)
+- `--like <pattern>` filter by SQL LIKE pattern on command text
+- `--id <id ...>` filter by job ID(s)
 
 Prompts for confirmation before updating rows.
 
 ## Global options
 
-- `--db <name>` SQLite DB basename; the file on disk is `<name>.sqlite`
+- `--dbfile <path>` SQLite DB path (default: `pardb.sqlite`)
+- `--db_retries <n>` max retries when SQLite is locked (default: `10`)
 - `--log_level {debug,info}` logging level (default: `info`)
 
 ## Useful examples
@@ -188,6 +222,13 @@ Retry failed jobs only:
 
 ```bash
 python3 parallelcmd.py reset
+python3 parallelcmd.py exec -j 4 --progress
+```
+
+Overwrite the queue with a new set of jobs (drop and recreate):
+
+```bash
+python3 parallelcmd.py init -f "echo {}" ::: x y z
 python3 parallelcmd.py exec -j 4 --progress
 ```
 
