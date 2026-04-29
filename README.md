@@ -104,14 +104,14 @@ Options:
 - `--prefix <cmd>` prefix each command (example: `srun -N1 -n1`)
 - `--max_jobs <n>` max jobs per worker
 - `--check_timeleft <sec>` stop taking new jobs when SLURM time left is below threshold
-- `--wait <sec>` keep polling for new jobs instead of exiting when the queue is temporarily empty
+- `--wait <sec>` when no job is available, wait this many seconds and retry instead of exiting (useful when another process is still adding jobs)
 
 ### `run`
 
 Initialize and execute in one step (`init` + `exec`).
 
 ```bash
-python3 parallelcmd.py run [init options] [exec options] <command ...> [ ::: <args ...> ]* [ :::: <argfile ...> ]*
+python3 parallelcmd.py run [options] <command ...> [ ::: <args ...> ]* [ :::: <argfile ...> ]*
 ```
 
 Common options include:
@@ -155,8 +155,13 @@ Prompts for confirmation before changing rows.
 Delete selected jobs.
 
 ```bash
-python3 parallelcmd.py delete [--all | --like <pattern> | --id <id ...>]
+python3 parallelcmd.py delete [options]
 ```
+
+Options:
+- `-a, --all` delete all jobs
+- `--like <pattern>` filter by SQL LIKE pattern on command text
+- `--id <id ...>` filter by job ID(s)
 
 Prompts for confirmation before deleting rows.
 
@@ -165,8 +170,13 @@ Prompts for confirmation before deleting rows.
 Find/replace command text for selected jobs.
 
 ```bash
-python3 parallelcmd.py update --replace "old,new" [--like <pattern> | --id <id ...>]
+python3 parallelcmd.py update [options]
 ```
+
+Options:
+- `--replace "old,new"` find and replace text pair (comma-separated)
+- `--like <pattern>` filter by SQL LIKE pattern on command text
+- `--id <id ...>` filter by job ID(s)
 
 Prompts for confirmation before updating rows.
 
@@ -203,6 +213,13 @@ Retry failed jobs only:
 
 ```bash
 python3 parallelcmd.py reset
+python3 parallelcmd.py exec -j 4 --progress
+```
+
+Overwrite the queue with a new set of jobs (drop and recreate):
+
+```bash
+python3 parallelcmd.py init -f "echo {}" ::: x y z
 python3 parallelcmd.py exec -j 4 --progress
 ```
 
