@@ -122,17 +122,30 @@ Common options include:
 Inspect queue summary or list all rows.
 
 ```bash
-python3 parallelcmd.py check
-python3 parallelcmd.py check --list
+python3 parallelcmd.py check [options]
 ```
+
+Options:
+- `-l, --list` list all matching rows instead of the summary
+- `--nonzero` filter to only jobs with non-zero exit value
+- `--where <sql>` arbitrary SQL `WHERE` clause
+- `--like <pattern>` filter by `Command LIKE <pattern>`
+- `--id <id ...>` filter by specific job IDs
 
 ### `reset`
 
 Reset selected jobs to pending (`Starttime`, `JobRuntime`, `Exitval` set to `NULL`).
 
 ```bash
-python3 parallelcmd.py reset [--all | --like <pattern> | --id <id ...> | --where <sql>]
+python3 parallelcmd.py reset [--all | --nonzero | --like <pattern> | --id <id ...> | --where <sql>]
 ```
+
+Options:
+- `-a, --all` reset all jobs
+- `--nonzero` reset only jobs with non-zero exit value
+- `--where <sql>` arbitrary SQL `WHERE` clause
+- `--like <pattern>` filter by `Command LIKE <pattern>`
+- `--id <id ...>` filter by specific job IDs
 
 Prompts for confirmation before changing rows.
 
@@ -159,6 +172,7 @@ Prompts for confirmation before updating rows.
 ## Global options
 
 - `--db <name>` SQLite DB basename; the file on disk is `<name>.sqlite`
+- `--db_retries <n>` max retries when SQLite is locked (default: `10`)
 - `--log_level {debug,info}` logging level (default: `info`)
 
 ## Useful examples
@@ -237,6 +251,7 @@ python3 parallelcmd.py exec -j 4 --progress
 - **How do I retry only failed jobs?**
 	- Failed jobs are those with non-zero exit values.
 	- Run `python3 parallelcmd.py reset` (default filter resets jobs with `Exitval <> 0`), then run `exec` again.
+	- Use `--nonzero` to be explicit: `python3 parallelcmd.py reset --nonzero`.
 
 - **Can I have multiple queues?**
 	- Yes. Use different database basenames with `--db`.

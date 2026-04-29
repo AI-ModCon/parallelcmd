@@ -393,6 +393,10 @@ def checkdb(args):
                 args.id = [args.id]
             filter = "Seq IN (%s)" % ",".join(map(str, args.id))
 
+        if args.nonzero:
+            nonzero_clause = "Exitval > 0"
+            filter = f"({filter}) AND {nonzero_clause}" if filter != "1=1" else nonzero_clause
+
         # con.row_factory = sqlite3.Row
         cur = con.cursor()
         # cur.execute("SELECT count(1) as Total, sum(case when Exitval >= 0 then 1 else 0 end) as Finished FROM parjob")
@@ -420,6 +424,9 @@ def resetdb(args):
             filter = f"Command LIKE '{args.like}'"
         if args.all:
             filter = "1=1"
+        if args.nonzero:
+            nonzero_clause = "Exitval > 0"
+            filter = f"({filter}) AND {nonzero_clause}" if filter != "1=1" else nonzero_clause
         if args.id:
             if not isinstance(args.id, list):
                 args.id = [args.id]
@@ -690,6 +697,7 @@ if __name__ == "__main__":
     ## subcommand: check
     parser = subparsers.add_parser("check")
     parser.add_argument("-l", "--list", action="store_true", help="list")
+    parser.add_argument("--nonzero", action="store_true", help="show only nonzero return tasks")
     parser.add_argument("--where", help="where statement")
     parser.add_argument("--like", help="like statement")
     parser.add_argument("--id", type=int, help="select by id", nargs="+")
@@ -700,6 +708,7 @@ if __name__ == "__main__":
     parser.add_argument("--where", help="where statement")
     parser.add_argument("--like", help="like statement")
     parser.add_argument("-a", "--all", action="store_true", help="reset all")
+    parser.add_argument("--nonzero", action="store_true", help="reset only nonzero return tasks")
     parser.add_argument("--id", type=int, help="reset by id", nargs="+")
     parser.set_defaults(func=resetdb)
 
