@@ -94,6 +94,7 @@ python3 parallelcmd.py exec [options]
 
 Options:
 - `-j, --nworkers` number of workers (default: `4`)
+- `--id <id ...>` run only these specific job IDs
 - `--progress` show aggregate progress line
 - `--dashboard` compact live dashboard mode
 - `--dryrun` print commands without running
@@ -115,7 +116,7 @@ python3 parallelcmd.py run [init options] [exec options] <command ...> [ ::: <ar
 
 Common options include:
 - init side: `--append`, `-f/--force`, `--check_dup`
-- exec side: `-j/--nworkers`, `--progress`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--check_timeleft`, `--wait`
+- exec side: `-j/--nworkers`, `--id`, `--progress`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--check_timeleft`, `--wait`
 
 ### `check`
 

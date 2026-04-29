@@ -102,6 +102,7 @@ def execute(
     max_jobs=None,
     check_timeleft=None,
     wait_interval=None,
+    id_list=None,
 ):
     ## check in
     hostname = socket.gethostname()
@@ -139,10 +140,14 @@ def execute(
                 try:
                     con.execute("BEGIN EXCLUSIVE;")
                     cur = con.cursor()
+                    id_clause = ""
+                    if id_list:
+                        ids = ",".join(map(str, id_list))
+                        id_clause = f" AND Seq IN ({ids})"
                     if randomorder:
-                        sql = f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL ORDER BY RANDOM() LIMIT 1;"
+                        sql = f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL{id_clause} ORDER BY RANDOM() LIMIT 1;"
                     else:
-                        sql = f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL LIMIT 1;"
+                        sql = f"SELECT Seq, Command FROM parjob WHERE Exitval is NULL{id_clause} LIMIT 1;"
                     cur.execute(sql)
                     row = cur.fetchone()
                     if not row:
@@ -627,6 +632,7 @@ def exec(args):
                 max_jobs=args.max_jobs,
                 check_timeleft=args.check_timeleft,
                 wait_interval=args.wait,
+                id_list=args.id if args.id is not None else None,
             )
             future_list.append(future)
 
@@ -733,6 +739,7 @@ if __name__ == "__main__":
     ## subcommand: exec
     parser = subparsers.add_parser("exec")
     parser.set_defaults(func=exec)
+    parser.add_argument("--id", type=int, help="run only these job IDs", nargs="+")
     parser.add_argument(
         "-j", "--nworkers", type=int, help="Number of workers", default=4
     )
@@ -760,6 +767,7 @@ if __name__ == "__main__":
     parser.set_defaults(func=run)
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
+    parser.add_argument("--id", type=int, help="run only these job IDs", nargs="+")
     parser.add_argument("-a", "--append", action="store_true", help="append")
     parser.add_argument("-f", "--force", action="store_true", help="overwrite existing table")
     parser.add_argument(
