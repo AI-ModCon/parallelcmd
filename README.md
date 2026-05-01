@@ -57,8 +57,10 @@ python3 parallelcmd.py check
 
 - `:::` starts an inline argument list.
 - `::::` starts an argument list loaded from a file (one value per line; empty lines and `#` comments are ignored).
+- `:::: -` reads the argument list from stdin.
 - Multiple lists are combined with Cartesian product.
 - If the command has no `{}` placeholders, placeholders are appended automatically.
+- If no `:::` or `::::` separator is given and stdin is a pipe, stdin lines are used as the argument list automatically.
 
 Example:
 
@@ -187,6 +189,19 @@ Prompts for confirmation before updating rows.
 - `--log_level {debug,info}` logging level (default: `info`)
 
 ## Useful examples
+
+Pipe arguments from stdin (auto-detected when no `:::` or `::::` is given):
+
+```bash
+cat cases.txt | python3 parallelcmd.py -j 4 "bash run.sh {}"
+seq 10 | python3 parallelcmd.py "echo {}"
+```
+
+Pipe stdin explicitly with `:::: -` (combinable with other arg lists):
+
+```bash
+cat cases.txt | python3 parallelcmd.py run "bash run.sh {} {}" :::: - ::: seed1 seed2
+```
 
 Run scripts from values in a file:
 

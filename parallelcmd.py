@@ -270,6 +270,7 @@ def cmdlist(argv):
     cmds = list()
     _args = list()
     _type = 0  ## 0: regular, 1: file
+    has_separator = any(x in (":::", "::::") for x in argv)
     for x in argv:
         if x == ":::":
             cmds.append(_args)
@@ -281,15 +282,28 @@ def cmdlist(argv):
             _type = 1
         else:
             if _type == 1:
-                with open(x, "r") as f:
-                    for line in f.readlines():
+                f = sys.stdin if x == "-" else open(x, "r")
+                try:
+                    for line in f:
                         if line.startswith("#") or line.strip() == "":
                             continue
                         _args.append(line.rstrip())
+                finally:
+                    if f is not sys.stdin:
+                        f.close()
             else:
                 _args.append(x)
 
     cmds.append(_args)
+
+    if not has_separator and not sys.stdin.isatty():
+        stdin_args = [
+            line.rstrip()
+            for line in sys.stdin
+            if not line.startswith("#") and line.strip() != ""
+        ]
+        if stdin_args:
+            cmds.append(stdin_args)
 
     return cmds
 
@@ -400,7 +414,11 @@ def checkdb(args):
 
         if args.nonzero:
             nonzero_clause = "Exitval > 0"
-            filter = f"({filter}) AND {nonzero_clause}" if filter != "1=1" else nonzero_clause
+            filter = (
+                f"({filter}) AND {nonzero_clause}"
+                if filter != "1=1"
+                else nonzero_clause
+            )
 
         # con.row_factory = sqlite3.Row
         cur = con.cursor()
@@ -432,7 +450,11 @@ def resetdb(args):
             filter = "1=1"
         if args.nonzero:
             nonzero_clause = "Exitval > 0"
-            filter = f"({filter}) AND {nonzero_clause}" if filter != "1=1" else nonzero_clause
+            filter = (
+                f"({filter}) AND {nonzero_clause}"
+                if filter != "1=1"
+                else nonzero_clause
+            )
         if args.id:
             if not isinstance(args.id, list):
                 args.id = [args.id]
@@ -530,7 +552,7 @@ def initdb(args):
     if args.append and args.force:
         raise SystemExit("--append and --force cannot be used together.")
 
-    cmds = cmdlist(sys.argv[1:])
+    cmds = args.cmds
     args_list = cmds[1:]
     cmd = " ".join(args.cmd)
     ## check if cmd has valid formatter
@@ -704,7 +726,9 @@ if __name__ == "__main__":
     ## subcommand: check
     parser = subparsers.add_parser("check")
     parser.add_argument("-l", "--list", action="store_true", help="list")
-    parser.add_argument("--nonzero", action="store_true", help="show only nonzero return tasks")
+    parser.add_argument(
+        "--nonzero", action="store_true", help="show only nonzero return tasks"
+    )
     parser.add_argument("--where", help="where statement")
     parser.add_argument("--like", help="like statement")
     parser.add_argument("--id", type=int, help="select by id", nargs="+")
@@ -715,7 +739,9 @@ if __name__ == "__main__":
     parser.add_argument("--where", help="where statement")
     parser.add_argument("--like", help="like statement")
     parser.add_argument("-a", "--all", action="store_true", help="reset all")
-    parser.add_argument("--nonzero", action="store_true", help="reset only nonzero return tasks")
+    parser.add_argument(
+        "--nonzero", action="store_true", help="reset only nonzero return tasks"
+    )
     parser.add_argument("--id", type=int, help="reset by id", nargs="+")
     parser.set_defaults(func=resetdb)
 
@@ -732,7 +758,9 @@ if __name__ == "__main__":
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("-a", "--append", action="store_true", help="append")
-    parser.add_argument("-f", "--force", action="store_true", help="overwrite existing table")
+    parser.add_argument(
+        "-f", "--force", action="store_true", help="overwrite existing table"
+    )
     parser.add_argument(
         "--check_dup", action="store_true", help="allow duplicate commands"
     )
@@ -770,7 +798,9 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
     parser.add_argument("--id", type=int, help="run only these job IDs", nargs="+")
     parser.add_argument("-a", "--append", action="store_true", help="append")
-    parser.add_argument("-f", "--force", action="store_true", help="overwrite existing table")
+    parser.add_argument(
+        "-f", "--force", action="store_true", help="overwrite existing table"
+    )
     parser.add_argument(
         "--check_dup", action="store_true", help="allow duplicate commands"
     )
@@ -824,6 +854,8 @@ if __name__ == "__main__":
 
     log("Python version:", ".".join(map(str, sys.version_info[:3])))
     log("Python info:", sys.version)
+
+    args.cmds = cmds
 
     if args.db is not None:
         dbname = args.db
