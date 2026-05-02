@@ -296,15 +296,6 @@ def cmdlist(argv):
 
     cmds.append(_args)
 
-    if not has_separator and not sys.stdin.isatty():
-        stdin_args = [
-            line.rstrip()
-            for line in sys.stdin
-            if not line.startswith("#") and line.strip() != ""
-        ]
-        if stdin_args:
-            cmds.append(stdin_args)
-
     return cmds
 
 
@@ -428,14 +419,15 @@ def checkdb(args):
         else:
             cur.execute(
                 "SELECT count(1) as Total, "
-                "sum(case when Exitval == -1000 then 1 else 0 end) as Processing, "
-                "sum(case when Exitval >= 0 then 1 else 0 end) as Finished, "
-                "sum(case when Exitval > 0 then 1 else 0 end) as 'Nonzero', "
-                "sum(case when Exitval < 0 and Exitval != -1000 then 1 else 0 end) as 'Other' "
+                "sum(case when Exitval IS NULL then 1 else 0 end) as Pending, "
+                "sum(case when Exitval == -1000 then 1 else 0 end) as Running, "
+                "sum(case when Exitval == 0 then 1 else 0 end) as Success, "
+                "sum(case when Exitval > 0 then 1 else 0 end) as Failed, "
+                "sum(case when Exitval < 0 and Exitval != -1000 then 1 else 0 end) as Error "
                 "FROM parjob;"
             )
             row = cur.fetchone()
-            row_format = " {:>5} {:>10} {:>8} {:>7} {:>5}"
+            row_format = " {:>5} | {:>7} {:>7} | {:>7} {:>6} {:>5}"
             print_table(cur, [row], row_format)
 
 
@@ -854,6 +846,15 @@ if __name__ == "__main__":
 
     log("Python version:", ".".join(map(str, sys.version_info[:3])))
     log("Python info:", sys.version)
+
+    if args.command in ("init", "run", None) and len(cmds) == 1 and not sys.stdin.isatty():
+        stdin_args = [
+            line.rstrip()
+            for line in sys.stdin
+            if not line.startswith("#") and line.strip() != ""
+        ]
+        if stdin_args:
+            cmds.append(stdin_args)
 
     args.cmds = cmds
 
