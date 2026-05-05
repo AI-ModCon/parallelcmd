@@ -105,8 +105,9 @@ Options:
 - `--randomorder` fetch pending jobs in random order
 - `--prefix <cmd>` prefix each command (example: `srun -N1 -n1`)
 - `--max_jobs <n>` max jobs per worker
-- `--check_timeleft <sec>` stop taking new jobs when SLURM time left is below threshold
-- `--wait <sec>` when no job is available, wait this many seconds and retry instead of exiting (useful when another process is still adding jobs)
+- `--check_timeleft SECONDS` stop taking new jobs when SLURM time left is below threshold
+- `--wait SECONDS` when no job is available, wait this many seconds and retry instead of exiting (useful when another process is still adding jobs)
+- `--timeout SECONDS` kill a task and move to the next if it runs longer than this many seconds; timed-out jobs are recorded with exit code `-124`
 
 ### `run`
 
@@ -118,7 +119,7 @@ python3 parallelcmd.py run [options] <command ...> [ ::: <args ...> ]* [ :::: <a
 
 Common options include:
 - init side: `--append`, `-f/--force`, `--check_dup`
-- exec side: `-j/--nworkers`, `--id`, `--progress`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--check_timeleft`, `--wait`
+- exec side: `-j/--nworkers`, `--id`, `--progress`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--check_timeleft`, `--wait`, `--timeout`
 
 ### `check`
 
@@ -217,6 +218,25 @@ python3 parallelcmd.py --db jobs init "echo {}" ::: x y z
 python3 parallelcmd.py --db jobs exec -j 2
 ```
 
+Kill tasks that exceed a time limit and continue to the next job:
+
+```bash
+python3 parallelcmd.py exec -j 4 --timeout 300
+```
+
+Timed-out jobs are recorded with exit code `-124`. Find them with:
+
+```bash
+python3 parallelcmd.py check -l --where "Exitval = -124"
+```
+
+Reset timed-out jobs to retry with a longer timeout:
+
+```bash
+python3 parallelcmd.py reset --where "Exitval = -124"
+python3 parallelcmd.py exec -j 4 --timeout 600
+```
+
 Keep workers alive while another process appends jobs later:
 
 ```bash
@@ -267,6 +287,10 @@ python3 parallelcmd.py exec -j 4 --progress
 	- This option requires a SLURM job environment.
 	- Run inside a SLURM allocation or omit `--check_timeleft`.
 
+- **Some jobs have exit code `-124`**
+	- These jobs were killed by `--timeout`.
+	- Reset and retry them: `python3 parallelcmd.py reset --where "Exitval = -124"`, then re-run `exec` with a larger `--timeout` or without it.
+
 - **`update --replace` does not parse as expected**
 	- Use exactly one comma-separated pair: `--replace "old,new"`.
 	- If your text contains commas, run multiple updates with simpler replacement pairs.
@@ -285,6 +309,10 @@ python3 parallelcmd.py exec -j 4 --progress
 	- Failed jobs are those with non-zero exit values.
 	- Run `python3 parallelcmd.py reset` (default filter resets jobs with `Exitval <> 0`), then run `exec` again.
 	- Use `--nonzero` to be explicit: `python3 parallelcmd.py reset --nonzero`.
+
+- **What does exit code `-124` mean?**
+	- The job was killed by `--timeout`. This matches the GNU `timeout` convention.
+	- Reset and rerun: `python3 parallelcmd.py reset --where "Exitval = -124"`, then `exec` with a longer `--timeout`.
 
 - **Can I have multiple queues?**
 	- Yes. Use different database basenames with `--db`.

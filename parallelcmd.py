@@ -103,6 +103,7 @@ def execute(
     check_timeleft=None,
     wait_interval=None,
     id_list=None,
+    timeout=None,
 ):
     ## check in
     hostname = socket.gethostname()
@@ -197,6 +198,7 @@ def execute(
                 stderr=subprocess.STDOUT,
                 text=True,
                 shell=True,
+                start_new_session=True,
                 env=os.environ.copy(),
             )
             with active.get_lock():
@@ -209,14 +211,32 @@ def execute(
                 )
                 con.commit()
 
+            timed_out = False
+
+            def _kill_on_timeout():
+                nonlocal timed_out
+                timed_out = True
+                try:
+                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+
+            timer = None
+            if timeout is not None and timeout > 0:
+                timer = threading.Timer(timeout, _kill_on_timeout)
+                timer.start()
+
             try:
                 for line in iter(p.stdout.readline, ""):
                     mq.put((workerid, taskid, line))
             except Exception as e:
                 log(f"{slot[workerid]}: Exception:", e)
-                print(line.rstrip(), flush=True)
 
             p.wait()
+
+            if timer is not None:
+                timer.cancel()
+
             ## check out
             mq.put((workerid, taskid, None))
             with active.get_lock():
@@ -224,13 +244,17 @@ def execute(
                 del active_ps[workerid]
 
             runtime = time.time() - starttime
-            if verbose:
+            exitval = -124 if timed_out else p.returncode
+
+            if timed_out:
+                print(f"{taskid}: Timeout after {timeout}s. Killed.", flush=True)
+            elif verbose:
                 print("%d: Done:" % taskid, p.returncode)
 
             with sqlite3.connect(dbfile) as con:
                 execute_sql_with_retry(
                     con,
-                    f"UPDATE parjob SET Exitval = {p.returncode}, JobRuntime = {runtime} WHERE Seq = {taskid};",
+                    f"UPDATE parjob SET Exitval = {exitval}, JobRuntime = {runtime} WHERE Seq = {taskid};",
                 )
                 con.commit()
             finished += 1
@@ -648,6 +672,7 @@ def exec(args):
                 check_timeleft=args.check_timeleft,
                 wait_interval=args.wait,
                 id_list=args.id if args.id is not None else None,
+                timeout=args.timeout,
             )
             future_list.append(future)
 
@@ -697,11 +722,12 @@ if __name__ == "__main__":
         sys.exit()
 
     parser_main = argparse.ArgumentParser(prog="OPTIONS")
-    parser_main.add_argument("--db", help="DB name")
+    parser_main.add_argument("--db", metavar="NAME", help="DB name")
     parser_main.add_argument(
         "--db_retries",
         type=int,
         default=10,
+        metavar="N",
         help="Max retries when SQLite database is locked",
     )
     parser_main.add_argument(
@@ -721,27 +747,27 @@ if __name__ == "__main__":
     parser.add_argument(
         "--nonzero", action="store_true", help="show only nonzero return tasks"
     )
-    parser.add_argument("--where", help="where statement")
-    parser.add_argument("--like", help="like statement")
-    parser.add_argument("--id", type=int, help="select by id", nargs="+")
+    parser.add_argument("--where", metavar="EXPR", help="where statement")
+    parser.add_argument("--like", metavar="PATTERN", help="like statement")
+    parser.add_argument("--id", type=int, metavar="ID", help="select by id", nargs="+")
     parser.set_defaults(func=checkdb)
 
     ## subcommand: reset
     parser = subparsers.add_parser("reset")
-    parser.add_argument("--where", help="where statement")
-    parser.add_argument("--like", help="like statement")
+    parser.add_argument("--where", metavar="EXPR", help="where statement")
+    parser.add_argument("--like", metavar="PATTERN", help="like statement")
     parser.add_argument("-a", "--all", action="store_true", help="reset all")
     parser.add_argument(
         "--nonzero", action="store_true", help="reset only nonzero return tasks"
     )
-    parser.add_argument("--id", type=int, help="reset by id", nargs="+")
+    parser.add_argument("--id", type=int, metavar="ID", help="reset by id", nargs="+")
     parser.set_defaults(func=resetdb)
 
     ## subcommand: delete
     parser = subparsers.add_parser("delete")
-    parser.add_argument("--like", help="like statement")
+    parser.add_argument("--like", metavar="PATTERN", help="like statement")
     parser.add_argument("-a", "--all", action="store_true", help="delete all")
-    parser.add_argument("--id", type=int, help="remove by id", nargs="+")
+    parser.add_argument("--id", type=int, metavar="ID", help="remove by id", nargs="+")
     parser.set_defaults(func=deletedb)
 
     ## subcommand: init
@@ -760,21 +786,33 @@ if __name__ == "__main__":
     ## subcommand: exec
     parser = subparsers.add_parser("exec")
     parser.set_defaults(func=exec)
-    parser.add_argument("--id", type=int, help="run only these job IDs", nargs="+")
     parser.add_argument(
-        "-j", "--nworkers", type=int, help="Number of workers", default=4
+        "--id", type=int, metavar="ID", help="run only these job IDs", nargs="+"
+    )
+    parser.add_argument(
+        "-j", "--nworkers", type=int, metavar="N", help="Number of workers", default=4
     )
     parser.add_argument("--progress", action="store_true", help="print progress")
     parser.add_argument("--dashboard", action="store_true", help="print only last line")
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
-    parser.add_argument("--timeskip", type=float, help="timeskip", default=0.0)
-    parser.add_argument("--randomorder", action="store_true", help="randomorder")
-    parser.add_argument("--prefix", help="command prefix")
     parser.add_argument(
-        "--max_jobs", type=int, help="maximum number of jobs per process to run"
+        "--timeskip", type=float, metavar="SECONDS", help="timeskip", default=0.0
     )
-    parser.add_argument("--check_timeleft", type=float, help="check timeleft (seconds)")
+    parser.add_argument("--randomorder", action="store_true", help="randomorder")
+    parser.add_argument("--prefix", metavar="CMD", help="command prefix")
+    parser.add_argument(
+        "--max_jobs",
+        type=int,
+        metavar="N",
+        help="maximum number of jobs per process to run",
+    )
+    parser.add_argument(
+        "--check_timeleft",
+        type=float,
+        metavar="SECONDS",
+        help="check timeleft (seconds)",
+    )
     parser.add_argument(
         "--wait",
         type=float,
@@ -782,13 +820,22 @@ if __name__ == "__main__":
         metavar="SECONDS",
         help="wait SECONDS and retry when no job is available (default: exit immediately)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="kill task and move to next if it runs longer than SECONDS (exit code -124)",
+    )
 
     ## subcommand: run (init + exec)
     parser = subparsers.add_parser("run")
     parser.set_defaults(func=run)
     parser.add_argument("cmd", help="command to execute", nargs=argparse.REMAINDER)
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
-    parser.add_argument("--id", type=int, help="run only these job IDs", nargs="+")
+    parser.add_argument(
+        "--id", type=int, metavar="ID", help="run only these job IDs", nargs="+"
+    )
     parser.add_argument("-a", "--append", action="store_true", help="append")
     parser.add_argument(
         "-f", "--force", action="store_true", help="overwrite existing table"
@@ -797,18 +844,28 @@ if __name__ == "__main__":
         "--check_dup", action="store_true", help="allow duplicate commands"
     )
     parser.add_argument(
-        "-j", "--nworkers", type=int, help="Number of workers", default=4
+        "-j", "--nworkers", type=int, metavar="N", help="Number of workers", default=4
     )
     parser.add_argument("--progress", action="store_true", help="print progress")
     parser.add_argument("--dashboard", action="store_true", help="print only last line")
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
-    parser.add_argument("--timeskip", type=float, help="timeskip", default=0.0)
-    parser.add_argument("--randomorder", action="store_true", help="randomorder")
-    parser.add_argument("--prefix", help="command prefix")
     parser.add_argument(
-        "--max_jobs", type=int, help="maximum number of jobs per process to run"
+        "--timeskip", type=float, metavar="SECONDS", help="timeskip", default=0.0
     )
-    parser.add_argument("--check_timeleft", type=float, help="check timeleft (seconds)")
+    parser.add_argument("--randomorder", action="store_true", help="randomorder")
+    parser.add_argument("--prefix", metavar="CMD", help="command prefix")
+    parser.add_argument(
+        "--max_jobs",
+        type=int,
+        metavar="N",
+        help="maximum number of jobs per process to run",
+    )
+    parser.add_argument(
+        "--check_timeleft",
+        type=float,
+        metavar="SECONDS",
+        help="check timeleft (seconds)",
+    )
     parser.add_argument(
         "--wait",
         type=float,
@@ -816,12 +873,23 @@ if __name__ == "__main__":
         metavar="SECONDS",
         help="wait SECONDS and retry when no job is available (default: exit immediately)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="kill task and move to next if it runs longer than SECONDS (exit code -124)",
+    )
 
     ## subcommand: update
     parser = subparsers.add_parser("update")
-    parser.add_argument("--replace", help="replace statement in the form of 'old,new'")
-    parser.add_argument("--like", help="like statement")
-    parser.add_argument("--id", type=int, help="reset by id", nargs="+")
+    parser.add_argument(
+        "--replace",
+        metavar="OLD,NEW",
+        help="replace statement in the form of 'old,new'",
+    )
+    parser.add_argument("--like", metavar="PATTERN", help="like statement")
+    parser.add_argument("--id", type=int, metavar="ID", help="reset by id", nargs="+")
     parser.set_defaults(func=updatedb)
 
     raw_argv = add_default_run_subcommand(sys.argv[1:], set(subparsers.choices.keys()))
@@ -847,7 +915,11 @@ if __name__ == "__main__":
     log("Python version:", ".".join(map(str, sys.version_info[:3])))
     log("Python info:", sys.version)
 
-    if args.command in ("init", "run", None) and len(cmds) == 1 and not sys.stdin.isatty():
+    if (
+        args.command in ("init", "run", None)
+        and len(cmds) == 1
+        and not sys.stdin.isatty()
+    ):
         stdin_args = [
             line.rstrip()
             for line in sys.stdin
