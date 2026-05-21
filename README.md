@@ -8,6 +8,28 @@ A lightweight Python CLI for queueing and executing shell commands in parallel. 
 - **Flexible workflows**: resume, and scale workers on demand
 
 
+## Installation
+
+Download the single script and make it executable — no pip or dependencies required.
+
+```bash
+# wget
+wget https://raw.githubusercontent.com/AI-ModCon/parallelcmd/main/parallelcmd.py
+chmod +x parallelcmd.py
+
+# curl
+curl -O https://raw.githubusercontent.com/AI-ModCon/parallelcmd/main/parallelcmd.py
+chmod +x parallelcmd.py
+```
+
+You can then run it directly:
+
+```bash
+./parallelcmd.py --help
+```
+
+Or place it somewhere on your `PATH` (e.g. `~/.local/bin/`) to use it as `parallelcmd.py` from any directory.
+
 ## Requirements
 
 - Python 3.8+
