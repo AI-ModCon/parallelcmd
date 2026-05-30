@@ -30,6 +30,50 @@ You can then run it directly:
 
 Or place it somewhere on your `PATH` (e.g. `~/.local/bin/`) to use it as `parallelcmd.py` from any directory.
 
+## Aliases
+
+Add these to `~/.bashrc` or `~/.zshrc` to avoid typing the full command each time.
+Assumes `parallelcmd.py` is on your `PATH`.
+
+```bash
+# parallelcmd aliases
+alias pc='parallelcmd.py'
+
+# init
+alias pci='parallelcmd.py init'
+alias pcia='parallelcmd.py init --append'
+alias pcif='parallelcmd.py init --force'
+
+# exec
+alias pce='parallelcmd.py exec'
+alias pcer='parallelcmd.py exec --randomorder'
+alias pcep='parallelcmd.py exec --progress'
+
+# check
+alias pck='parallelcmd.py check'
+alias pckl='parallelcmd.py check -l'
+alias pckf='parallelcmd.py check -l --nonzero'
+
+# reset / delete / update
+alias pcr='parallelcmd.py reset'
+alias pcra='parallelcmd.py reset --all'
+alias pcrf='parallelcmd.py reset --nonzero'
+alias pcd='parallelcmd.py delete'
+alias pcda='parallelcmd.py delete --all'
+alias pcu='parallelcmd.py update'
+
+# reset timed-out jobs
+alias pctimeout='parallelcmd.py reset --where "Exitval = -124"'
+
+# exec with N workers and progress  (usage: pcej 8)
+pcej() { parallelcmd.py exec -j "$@" --progress; }
+
+# run (init + exec) with common worker counts and progress
+pcj4()  { parallelcmd.py run -j 4  --progress "$@"; }
+pcj8()  { parallelcmd.py run -j 8  --progress "$@"; }
+pcj16() { parallelcmd.py run -j 16 --progress "$@"; }
+```
+
 ## Requirements
 
 - Python 3.8+
