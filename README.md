@@ -62,19 +62,19 @@ python3 parallelcmd.py init "echo {}" ::: a b c
 Run queued jobs with 4 workers:
 
 ```bash
-python3 parallelcmd.py exec -j 4 --progress
+python3 parallelcmd.py exec -j 4
 ```
 
 Or do both in one command:
 
 ```bash
-python3 parallelcmd.py run -j 4 --progress "echo {}" ::: a b c
+python3 parallelcmd.py run -j 4 "echo {}" ::: a b c
 ```
 
 If you omit the subcommand entirely, `parallelcmd.py` defaults to `run`:
 
 ```bash
-python3 parallelcmd.py -j 4 --progress "echo {}" ::: a b c
+python3 parallelcmd.py -j 4 "echo {}" ::: a b c
 ```
 
 Check status:
@@ -289,7 +289,7 @@ Run scripts from values in a file:
 
 ```bash
 python3 parallelcmd.py init "bash run_case.sh {}" :::: cases.txt
-python3 parallelcmd.py exec -j 8 --progress
+python3 parallelcmd.py exec -j 8
 ```
 
 Use a custom DB file:
@@ -329,14 +329,14 @@ Retry failed jobs only:
 
 ```bash
 python3 parallelcmd.py reset
-python3 parallelcmd.py exec -j 4 --progress
+python3 parallelcmd.py exec -j 4
 ```
 
 Overwrite the queue with a new set of jobs (drop and recreate):
 
 ```bash
 python3 parallelcmd.py init -f "echo {}" ::: x y z
-python3 parallelcmd.py exec -j 4 --progress
+python3 parallelcmd.py exec -j 4
 ```
 
 ## Notes
@@ -382,12 +382,12 @@ alias pcu='parallelcmd.py update'
 alias pctimeout='parallelcmd.py reset --where "Exitval = 124"'
 
 # exec with N workers and progress  (usage: pcej 8)
-pcej() { parallelcmd.py exec -j "$@" --progress; }
+pcej() { parallelcmd.py exec -j "$@"; }
 
 # run (init + exec) with common worker counts and progress
-pcj4()  { parallelcmd.py run -j 4  --progress "$@"; }
-pcj8()  { parallelcmd.py run -j 8  --progress "$@"; }
-pcj16() { parallelcmd.py run -j 16 --progress "$@"; }
+pcj4()  { parallelcmd.py run -j 4 "$@"; }
+pcj8()  { parallelcmd.py run -j 8 "$@"; }
+pcj16() { parallelcmd.py run -j 16 "$@"; }
 ```
 
 ## Troubleshooting
@@ -490,7 +490,7 @@ GNU Parallel is broader for one-shot parallel execution — especially argument 
 ## FAQ
 
 - **How do I resume after interruption?**
-	- Just run `python3 parallelcmd.py exec -j 4 --progress` again.
+	- Just run `python3 parallelcmd.py exec -j 4` again.
 	- Completed jobs (exit code `0`) stay done; pending jobs continue.
 
 - **How do I retry only failed jobs?**
