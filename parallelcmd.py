@@ -26,6 +26,9 @@ mq = queue.Queue()
 slot = dict()
 active_ps = dict()
 active = mp.Value("i", 0)
+fail_count = mp.Value("i", 0)
+halt_flag = mp.Value("b", 0)
+task_cmd_map = {}
 dbname = "pardb" if os.getenv("PARDB") is None else os.getenv("PARDB")
 dbfile = dbname + ".sqlite"
 db_retries = 10
@@ -108,16 +111,26 @@ def execute(
     wait_interval=None,
     id_list=None,
     timeout=None,
+    retries=0,
+    halt=None,
+    output_dir=None,
 ):
     ## check in
     hostname = socket.gethostname()
     workerid = threading.get_native_id()
     nomorejob = False
     finished = 0
+    first = True
 
     while True:
-        ## wait a random to avoid contention at once
-        time.sleep(random.randint(0, 10))
+        ## stagger only the first fetch to avoid thundering-herd on the DB lock
+        if first:
+            time.sleep(random.randint(0, 10))
+            first = False
+
+        if halt_flag.value:
+            log(f"{slot[workerid]}: Halt flag set. Stopping.")
+            break
 
         if check_timeleft is not None and check_timeleft > 0:
             jobid = os.getenv("SLURM_JOB_ID", None)
@@ -171,6 +184,7 @@ def execute(
                     log(f"{slot[workerid]}: taskid, cmd:", taskid, cmd)
                     assert cur.rowcount == 1
                     con.commit()
+                    task_cmd_map[taskid] = cmd
                     break
                 except Exception as e:
                     log(f"{slot[workerid]}: Exception:", e)
@@ -186,7 +200,7 @@ def execute(
                 continue
             break
 
-        bashargs = ["bash", "-c", cmd]
+        bashargs = ["bash", "-c", cmd.replace("{%}", str(slot[workerid])).replace("{#}", str(taskid))]
         if prefix is not None:
             bashargs = shlex.split(prefix) + bashargs
         if verbose:
@@ -197,7 +211,7 @@ def execute(
             with sqlite3.connect(dbfile) as con:
                 execute_sql_with_retry(
                     con,
-                    "UPDATE parjob SET Starttime = NULL, Exitval = NULL WHERE Seq = ?;",
+                    "UPDATE parjob SET Exitval = 0 WHERE Seq = ?;",
                     (taskid,),
                 )
                 con.commit()
@@ -208,68 +222,86 @@ def execute(
 
         if not dryrun:
             starttime = time.time()
-            with active.get_lock():
-                active.value += 1
-
-            p = subprocess.Popen(
-                bashargs,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                shell=False,
-                start_new_session=True,
-                env=os.environ.copy(),
-            )
-            with active.get_lock():
-                active_ps[workerid] = p
-
-            with sqlite3.connect(dbfile) as con:
-                execute_sql_with_retry(
-                    con,
-                    "UPDATE parjob SET Hostname = ?, PID = ? WHERE Seq = ?;",
-                    (hostname, p.pid, taskid),
-                )
-                con.commit()
-
+            max_attempts = 1 + retries
+            exitval = None
             timed_out = False
 
-            def _kill_on_timeout():
-                nonlocal timed_out
-                timed_out = True
+            for attempt in range(max_attempts):
+                timed_out = False
+                with active.get_lock():
+                    active.value += 1
+
+                p = subprocess.Popen(
+                    bashargs,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    shell=False,
+                    start_new_session=True,
+                    env=os.environ.copy(),
+                )
+                with active.get_lock():
+                    active_ps[workerid] = p
+
+                if attempt == 0:
+                    with sqlite3.connect(dbfile) as con:
+                        execute_sql_with_retry(
+                            con,
+                            "UPDATE parjob SET Hostname = ?, PID = ? WHERE Seq = ?;",
+                            (hostname, p.pid, taskid),
+                        )
+                        con.commit()
+
+                def _kill_on_timeout():
+                    nonlocal timed_out
+                    timed_out = True
+                    try:
+                        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                    except Exception:
+                        pass
+
+                timer = None
+                if timeout is not None and timeout > 0:
+                    timer = threading.Timer(timeout, _kill_on_timeout)
+                    timer.start()
+
+                outfile = None
+                if output_dir is not None:
+                    os.makedirs(output_dir, exist_ok=True)
+                    outfile = open(os.path.join(output_dir, f"{taskid}.out"), "a")
                 try:
-                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+                    for line in iter(p.stdout.readline, ""):
+                        mq.put((workerid, taskid, line))
+                        if outfile:
+                            outfile.write(line)
+                except Exception as e:
+                    log(f"{slot[workerid]}: Exception:", e)
+                finally:
+                    if outfile:
+                        outfile.close()
 
-            timer = None
-            if timeout is not None and timeout > 0:
-                timer = threading.Timer(timeout, _kill_on_timeout)
-                timer.start()
+                p.wait()
 
-            try:
-                for line in iter(p.stdout.readline, ""):
-                    mq.put((workerid, taskid, line))
-            except Exception as e:
-                log(f"{slot[workerid]}: Exception:", e)
+                if timer is not None:
+                    timer.cancel()
 
-            p.wait()
+                mq.put((workerid, taskid, None))
+                with active.get_lock():
+                    active.value -= 1
+                    del active_ps[workerid]
 
-            if timer is not None:
-                timer.cancel()
+                exitval = 124 if timed_out else p.returncode
 
-            ## check out
-            mq.put((workerid, taskid, None))
-            with active.get_lock():
-                active.value -= 1
-                del active_ps[workerid]
+                if timed_out:
+                    info("%d: Timeout after %ss. Killed." % (taskid, timeout))
+                    break
+                if exitval == 0 or attempt == max_attempts - 1:
+                    if verbose:
+                        log("%d: Done: %s" % (taskid, exitval))
+                    break
+                info("%d: Failed (exit %d), retry %d/%d" % (taskid, exitval, attempt + 1, retries))
 
             runtime = time.time() - starttime
-            exitval = -124 if timed_out else p.returncode
-
-            if timed_out:
-                info("%d: Timeout after %ss. Killed." % (taskid, timeout))
-            elif verbose:
-                log("%d: Done: %s" % (taskid, p.returncode))
 
             with sqlite3.connect(dbfile) as con:
                 execute_sql_with_retry(
@@ -277,6 +309,15 @@ def execute(
                     f"UPDATE parjob SET Exitval = {exitval}, JobRuntime = {runtime} WHERE Seq = {taskid};",
                 )
                 con.commit()
+
+            if halt is not None and exitval != 0:
+                with fail_count.get_lock():
+                    fail_count.value += 1
+                    if fail_count.value >= halt:
+                        info("Halt: %d failure(s) reached threshold %d." % (fail_count.value, halt))
+                        with halt_flag.get_lock():
+                            halt_flag.value = 1
+
             finished += 1
 
             if max_jobs is not None and finished >= max_jobs:
@@ -343,27 +384,34 @@ def cmdlist(argv):
     return cmds
 
 
-def progress(done, total, dashboard=False, progress=False, timeskip=0.0):
+def progress(done, total, dashboard=False, progress=False, timeskip=0.0, eta=False, bar=False, quiet=False, tag=False):
     def putline():
+        elapsed = time.time() - t0
+        if bar:
+            bar_width = 30
+            filled = int(bar_width * done / total) if total > 0 else 0
+            arrow = ("=" * (filled - 1) + ">") if filled > 0 else ""
+            spaces = " " * (bar_width - filled)
+            line = "[%s%s] %d/%d %.1f%%  %.2fs" % (arrow, spaces, done, total, float(done) / total * 100, elapsed)
+        else:
+            line = (
+                "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f%%/%.02fs"
+                % (active.value, done, total, float(done) / total * 100, elapsed)
+            )
+        if eta:
+            if done == 0:
+                line += "  ETA: --"
+            else:
+                eta_sec = elapsed / done * (total - done)
+                line += "  ETA: %.0fs" % eta_sec
         os.system("tput ll")
         print("\r", end="", flush=True)
-        print(
-            "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f%%/%.02fs"
-            % (
-                active.value,
-                done,
-                total,
-                float(done) / total * 100,
-                time.time() - t0,
-            ),
-            end="",
-            flush=True,
-        )
+        print(line, end="", flush=True)
         if not dashboard:
             print("")
         os.system("tput el")
 
-    extra = 1 if progress else 0
+    extra = 1 if (progress or bar) else 0
     t0 = time.time()
     t1 = time.time()
     t2 = time.time()
@@ -389,17 +437,16 @@ def progress(done, total, dashboard=False, progress=False, timeskip=0.0):
                 print("%d:" % taskid, line.rstrip(), end="", flush=True)
                 os.system("tput el")
                 os.system("tput rc")
-            else:
-                print("%d:" % taskid, line, end="", flush=True)
+            elif not quiet:
+                prefix = task_cmd_map.get(taskid, str(taskid)) if tag else str(taskid)
+                print("%s:" % prefix, line, end="", flush=True)
 
-            if progress:
+            if progress or bar:
                 ## try not too frequent
                 if time.time() - t1 > 2:
                     total, done = jobcount()
                     putline()
                     t1 = time.time()
-                else:
-                    pass
 
 
 def print_table(cur, rows, row_format):
@@ -455,6 +502,9 @@ def checkdb(args):
                 else nonzero_clause
             )
 
+        if args.running:
+            filter = "Exitval = -1000"
+
         # con.row_factory = sqlite3.Row
         cur = con.cursor()
         # cur.execute("SELECT count(1) as Total, sum(case when Exitval >= 0 then 1 else 0 end) as Finished FROM parjob")
@@ -500,8 +550,9 @@ def resetdb(args):
         rows, row_format = selectdb(cur, filter)
         # (count,) = cur.fetchone()
         count = len(rows)
-        ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
-        if ans == "Y" or ans == "y":
+        if not getattr(args, "yes", False):
+            ans = input("%d number of rows will be reset. Continue? (Y/N): " % count)
+        if getattr(args, "yes", False) or ans == "Y" or ans == "y":
             cur = execute_sql_with_retry(
                 con,
                 f"UPDATE parjob SET Starttime = NULL, Hostname = NULL, PID = NULL, JobRuntime = NULL, Exitval = NULL WHERE {filter};",
@@ -527,8 +578,9 @@ def deletedb(args):
         cur = con.cursor()
         rows, row_format = selectdb(cur, filter)
         count = len(rows)
-        ans = input("%d number of rows will be deleted. Continue? (Y/N): " % count)
-        if ans == "Y" or ans == "y":
+        if not getattr(args, "yes", False):
+            ans = input("%d number of rows will be deleted. Continue? (Y/N): " % count)
+        if getattr(args, "yes", False) or ans == "Y" or ans == "y":
             cur = execute_sql_with_retry(con, f"DELETE FROM parjob WHERE {filter};")
             info("Delete: %d" % cur.rowcount)
             con.commit()
@@ -566,8 +618,9 @@ def updatedb(args):
             )
 
         count = len(rows)
-        ans = input("%d number of rows will be updated. Continue? (Y/N): " % count)
-        if ans == "Y" or ans == "y":
+        if not getattr(args, "yes", False):
+            ans = input("%d number of rows will be updated. Continue? (Y/N): " % count)
+        if getattr(args, "yes", False) or ans == "Y" or ans == "y":
             affected_rowcount = 0
             for row in rows:
                 seq = row[0]
@@ -598,8 +651,10 @@ def initdb(args):
         cmd += " {}" * len(args_list)
 
     task_list = list()
-    for i, argpair in enumerate(itertools.product(*args_list)):
-        fullcmd = cmd.format(*argpair)
+    cmd_escaped = cmd.replace("{%}", "{{%}}").replace("{#}", "{{#}}")
+    combinator = zip if args.zip else itertools.product
+    for i, argpair in enumerate(combinator(*args_list)):
+        fullcmd = cmd_escaped.format(*argpair)
         task_list.append((i, fullcmd))
 
     with sqlite3.connect(dbfile) as con:
@@ -669,6 +724,10 @@ def exec(args):
             args.dashboard,
             args.progress,
             args.timeskip,
+            args.eta,
+            args.bar,
+            args.quiet,
+            args.tag,
         ),
     )
     p.start()
@@ -693,6 +752,9 @@ def exec(args):
                 wait_interval=args.wait,
                 id_list=args.id if args.id is not None else None,
                 timeout=args.timeout,
+                retries=args.retries,
+                halt=args.halt,
+                output_dir=args.output_dir,
             )
             future_list.append(future)
 
@@ -767,6 +829,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--nonzero", action="store_true", help="show only nonzero return tasks"
     )
+    parser.add_argument("--running", action="store_true", help="show only currently running tasks")
     parser.add_argument("--where", metavar="EXPR", help="where statement")
     parser.add_argument("--like", metavar="PATTERN", help="like statement")
     parser.add_argument("--id", type=int, metavar="ID", help="select by id", nargs="+")
@@ -781,6 +844,7 @@ if __name__ == "__main__":
         "--nonzero", action="store_true", help="reset only nonzero return tasks"
     )
     parser.add_argument("--id", type=int, metavar="ID", help="reset by id", nargs="+")
+    parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
     parser.set_defaults(func=resetdb)
 
     ## subcommand: delete
@@ -788,6 +852,7 @@ if __name__ == "__main__":
     parser.add_argument("--like", metavar="PATTERN", help="like statement")
     parser.add_argument("-a", "--all", action="store_true", help="delete all")
     parser.add_argument("--id", type=int, metavar="ID", help="remove by id", nargs="+")
+    parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
     parser.set_defaults(func=deletedb)
 
     ## subcommand: init
@@ -802,6 +867,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--check_dup", action="store_true", help="allow duplicate commands"
     )
+    parser.add_argument(
+        "--zip", action="store_true", help="pair argument lists element-by-element instead of Cartesian product"
+    )
 
     ## subcommand: exec
     parser = subparsers.add_parser("exec")
@@ -813,6 +881,8 @@ if __name__ == "__main__":
         "-j", "--nworkers", type=int, metavar="N", help="Number of workers", default=4
     )
     parser.add_argument("--progress", action="store_true", help="print progress")
+    parser.add_argument("--eta", action="store_true", help="append ETA to the progress line (requires --progress or --bar)")
+    parser.add_argument("--bar", action="store_true", help="show a visual ASCII progress bar")
     parser.add_argument("--dashboard", action="store_true", help="print only last line")
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
@@ -845,8 +915,31 @@ if __name__ == "__main__":
         type=float,
         default=None,
         metavar="SECONDS",
-        help="kill task and move to next if it runs longer than SECONDS (exit code -124)",
+        help="kill task and move to next if it runs longer than SECONDS (exit code 124)",
     )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=0,
+        metavar="N",
+        help="retry a failed job up to N times before marking it failed (default: 0)",
+    )
+    parser.add_argument(
+        "--halt",
+        type=int,
+        default=None,
+        metavar="N",
+        help="stop queuing new jobs after N failures",
+    )
+    parser.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        default=None,
+        dest="output_dir",
+        help="save each job's stdout to DIR/<seq>.out",
+    )
+    parser.add_argument("--quiet", action="store_true", help="suppress per-job output (show only progress/bar)")
+    parser.add_argument("--tag", action="store_true", help="prefix each output line with the full command instead of seq ID")
 
     ## subcommand: run (init + exec)
     parser = subparsers.add_parser("run")
@@ -864,9 +957,14 @@ if __name__ == "__main__":
         "--check_dup", action="store_true", help="allow duplicate commands"
     )
     parser.add_argument(
+        "--zip", action="store_true", help="pair argument lists element-by-element instead of Cartesian product"
+    )
+    parser.add_argument(
         "-j", "--nworkers", type=int, metavar="N", help="Number of workers", default=4
     )
     parser.add_argument("--progress", action="store_true", help="print progress")
+    parser.add_argument("--eta", action="store_true", help="append ETA to the progress line (requires --progress or --bar)")
+    parser.add_argument("--bar", action="store_true", help="show a visual ASCII progress bar")
     parser.add_argument("--dashboard", action="store_true", help="print only last line")
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
     parser.add_argument(
@@ -898,8 +996,31 @@ if __name__ == "__main__":
         type=float,
         default=None,
         metavar="SECONDS",
-        help="kill task and move to next if it runs longer than SECONDS (exit code -124)",
+        help="kill task and move to next if it runs longer than SECONDS (exit code 124)",
     )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=0,
+        metavar="N",
+        help="retry a failed job up to N times before marking it failed (default: 0)",
+    )
+    parser.add_argument(
+        "--halt",
+        type=int,
+        default=None,
+        metavar="N",
+        help="stop queuing new jobs after N failures",
+    )
+    parser.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        default=None,
+        dest="output_dir",
+        help="save each job's stdout to DIR/<seq>.out",
+    )
+    parser.add_argument("--quiet", action="store_true", help="suppress per-job output (show only progress/bar)")
+    parser.add_argument("--tag", action="store_true", help="prefix each output line with the full command instead of seq ID")
 
     ## subcommand: update
     parser = subparsers.add_parser("update")
@@ -911,6 +1032,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--like", metavar="PATTERN", help="like statement")
     parser.add_argument("--id", type=int, metavar="ID", help="reset by id", nargs="+")
+    parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
     parser.set_defaults(func=updatedb)
 
     raw_argv = add_default_run_subcommand(sys.argv[1:], set(subparsers.choices.keys()))
