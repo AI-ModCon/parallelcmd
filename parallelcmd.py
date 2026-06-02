@@ -200,9 +200,10 @@ def execute(
                 continue
             break
 
-        bashargs = ["bash", "-c", cmd.replace("{%}", str(slot[workerid])).replace("{#}", str(taskid))]
+        full_cmd = cmd.replace("{%}", str(slot[workerid])).replace("{#}", str(taskid))
         if prefix is not None:
-            bashargs = shlex.split(prefix) + bashargs
+            full_cmd = prefix + " " + full_cmd
+        bashargs = ["bash", "-c", full_cmd]
         if verbose:
             log("%d: cmd:" % taskid, shlex.join(bashargs))
 
@@ -600,31 +601,19 @@ def updatedb(args):
             filter = "Seq IN (%s)" % ",".join(map(str, args.id))
 
         cur = con.cursor()
-        rows, row_format = selectdb(cur, filter)
-        replace_a, replace_b = args.replace.split(",")
-        for row in rows:
-            cmd = row[-1]
+        cur.execute(f"SELECT Seq, Command FROM parjob WHERE {filter};")
+        rows = cur.fetchall()
+        replace_a, replace_b = args.replace.split(",", 1)
+        for seq, cmd in rows:
             new_cmd = cmd.replace(replace_a, replace_b)
-
-            print(
-                row_format.format(
-                    *map(
-                        lambda x: str(x) if not isinstance(x, float) else "%.2f" % x,
-                        row,
-                    )
-                ),
-                "->",
-                new_cmd,
-            )
+            print(f"  {seq}: {cmd}  ->  {new_cmd}")
 
         count = len(rows)
         if not getattr(args, "yes", False):
             ans = input("%d number of rows will be updated. Continue? (Y/N): " % count)
         if getattr(args, "yes", False) or ans == "Y" or ans == "y":
             affected_rowcount = 0
-            for row in rows:
-                seq = row[0]
-                cmd = row[-1]
+            for seq, cmd in rows:
                 new_cmd = cmd.replace(replace_a, replace_b)
 
                 cur = execute_sql_with_retry(
@@ -636,6 +625,101 @@ def updatedb(args):
             con.commit()
         else:
             print("Aborted.")
+
+
+def diagnosedb(args):
+    stale_threshold = args.stale
+    wal = dbfile + "-wal"
+    shm = dbfile + "-shm"
+
+    # 1. Summary counts
+    print("=== Job Counts ===")
+    try:
+        con1 = sqlite3.connect(dbfile, timeout=2)
+        cur = con1.cursor()
+        cur.execute(
+            "SELECT count(1) as Total, "
+            "sum(case when Exitval IS NULL then 1 else 0 end) as Pending, "
+            "sum(case when Exitval == -1000 then 1 else 0 end) as Running, "
+            "sum(case when Exitval == 0 then 1 else 0 end) as Success, "
+            "sum(case when Exitval > 0 then 1 else 0 end) as Failed, "
+            "sum(case when Exitval < 0 and Exitval != -1000 then 1 else 0 end) as Error "
+            "FROM parjob;"
+        )
+        row = cur.fetchone()
+        con1.close()
+        row_format = " {:>5} | {:>7} {:>7} | {:>7} {:>6} {:>5}"
+        print_table(cur, [row], row_format)
+    except sqlite3.OperationalError as e:
+        print(f"  Could not query job counts: {e}")
+
+    # 2. In-progress jobs with age
+    print("\n=== In-Progress Jobs (Exitval = -1000) ===")
+    try:
+        con2 = sqlite3.connect(dbfile, timeout=2)
+        cur = con2.cursor()
+        cur.execute(
+            "SELECT Seq, CAST(unixepoch('now') - Starttime AS INTEGER) as age_sec, "
+            "Hostname, PID, Command "
+            "FROM parjob WHERE Exitval = -1000 ORDER BY age_sec DESC;"
+        )
+        rows = cur.fetchall()
+        con2.close()
+        if not rows:
+            print("  None.")
+        else:
+            row_format = " {:>4} {:>10} {:<22} {:>8} {:<60}"
+            print_table(cur, rows, row_format)
+            stale = [r for r in rows if r[1] is not None and r[1] > stale_threshold]
+            if stale:
+                print(f"\n  WARNING: {len(stale)} job(s) running > {stale_threshold}s — possibly stale (worker died).")
+                print(f"  Reset with: parallelcmd.py reset --where \"Exitval = -1000\" -y")
+    except sqlite3.OperationalError as e:
+        print(f"  Could not query in-progress jobs: {e}")
+
+    # 3. WAL / SHM file sizes
+    print("\n=== DB File Sizes ===")
+    for f in [dbfile, wal, shm]:
+        if os.path.exists(f):
+            size = os.path.getsize(f)
+            note = ""
+            if f == wal and size > 10 * 1024 * 1024:
+                note = "  ** WARNING: large WAL — checkpointing may be stalled **"
+            print(f"  {f}: {size:,} bytes{note}")
+        else:
+            print(f"  {f}: not present")
+
+    # 4. Exclusive lock probe
+    print("\n=== Lock Check ===")
+    try:
+        con = sqlite3.connect(dbfile, timeout=2)
+        con.execute("BEGIN EXCLUSIVE;")
+        con.rollback()
+        con.close()
+        print("  OK: acquired and released EXCLUSIVE lock within 2s.")
+    except sqlite3.OperationalError as e:
+        print(f"  LOCKED: {e}")
+        print(f"  Check open handles: lsof {dbfile} {wal} {shm}")
+
+    # 5. lsof — run after all DB connections are closed; filter our own PID
+    print("\n=== Open File Handles (lsof) ===")
+    try:
+        result = subprocess.run(
+            ["lsof", dbfile, wal, shm],
+            stdout=subprocess.PIPE,
+            stderr=None,
+            universal_newlines=True,
+        )
+        our_pid = str(os.getpid())
+        lines = result.stdout.splitlines()
+        filtered = [l for l in lines if not (len(l.split()) > 1 and l.split()[1] == our_pid)]
+        output = "\n".join(filtered).strip()
+        if output:
+            print(output)
+        else:
+            print("  No other processes have the DB files open.")
+    except FileNotFoundError:
+        print("  lsof not found on this system.")
 
 
 def initdb(args):
@@ -1034,6 +1118,17 @@ if __name__ == "__main__":
     parser.add_argument("--id", type=int, metavar="ID", help="reset by id", nargs="+")
     parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
     parser.set_defaults(func=updatedb)
+
+    ## subcommand: diagnose
+    parser = subparsers.add_parser("diagnose")
+    parser.add_argument(
+        "--stale",
+        type=float,
+        default=3600,
+        metavar="SECONDS",
+        help="flag in-progress jobs older than this many seconds as potentially stale (default: 3600)",
+    )
+    parser.set_defaults(func=diagnosedb)
 
     raw_argv = add_default_run_subcommand(sys.argv[1:], set(subparsers.choices.keys()))
     cmds = cmdlist(raw_argv)
