@@ -114,6 +114,7 @@ def execute(
     retries=0,
     halt=None,
     output_dir=None,
+    delay=10,
 ):
     ## check in
     hostname = socket.gethostname()
@@ -125,7 +126,7 @@ def execute(
     while True:
         ## stagger only the first fetch to avoid thundering-herd on the DB lock
         if first:
-            time.sleep(random.randint(0, 10))
+            time.sleep(random.uniform(0, delay) if delay else 0)
             first = False
 
         if halt_flag.value:
@@ -199,6 +200,9 @@ def execute(
                 nomorejob = False
                 continue
             break
+
+        if delay is not None and delay > 0:
+            time.sleep(delay)
 
         full_cmd = cmd.replace("{%}", str(slot[workerid])).replace("{#}", str(taskid))
         if prefix is not None:
@@ -839,6 +843,7 @@ def exec(args):
                 retries=args.retries,
                 halt=args.halt,
                 output_dir=args.output_dir,
+                delay=args.delay,
             )
             future_list.append(future)
 
@@ -1024,6 +1029,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--quiet", action="store_true", help="suppress per-job output (show only progress/bar)")
     parser.add_argument("--tag", action="store_true", help="prefix each output line with the full command instead of seq ID")
+    parser.add_argument("--delay", type=float, default=10, metavar="SECONDS", help="sleep SECONDS before starting each job (default: 10)")
 
     ## subcommand: run (init + exec)
     parser = subparsers.add_parser("run")
@@ -1105,6 +1111,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--quiet", action="store_true", help="suppress per-job output (show only progress/bar)")
     parser.add_argument("--tag", action="store_true", help="prefix each output line with the full command instead of seq ID")
+    parser.add_argument("--delay", type=float, default=10, metavar="SECONDS", help="sleep SECONDS before starting each job (default: 10)")
 
     ## subcommand: update
     parser = subparsers.add_parser("update")
