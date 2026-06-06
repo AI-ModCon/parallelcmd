@@ -175,16 +175,17 @@ Options:
 - `-v, --verbose`
 - `--timeskip <sec>` throttle displayed output updates
 - `--randomorder` fetch pending jobs in random order
-- `--prefix <cmd>` prefix each command (example: `srun -N1 -n1`)
+- `--prefix <cmd>` prefix each command; supports shell env var assignments (example: `srun -N1 -n1`, `NP=8`)
 - `--max_jobs <n>` max jobs per worker
-- `--check_timeleft <sec>` stop taking new jobs when SLURM time left is below threshold
+- `--delay <sec>` sleep this many seconds before starting each job (default: `0`); also used as the upper bound for the initial per-worker random stagger
 - `--wait <sec>` when no job is available, wait this many seconds and retry instead of exiting (useful when another process is still adding jobs)
 - `--timeout <sec>` kill a task and move to the next if it runs longer than this many seconds; timed-out jobs are recorded with exit code `124`
 - `--retries <n>` retry a failed job up to N times before marking it failed (default: `0`; timed-out jobs are never retried)
 - `--halt <n>` stop queuing new jobs after N failures; already-running jobs complete normally
-- `--output-dir <dir>` save each job's stdout to `<dir>/<seq>.out`
+- `--output-dir <dir>` save each job's stdout (and stderr) to `<dir>/<seq>.out`
 - `--quiet` suppress per-job output lines (useful with `--progress` or `--bar`)
 - `--tag` prefix each output line with the full command instead of the seq ID
+- `--hook <file>` Python plugin file; see [Hooks](#hooks) below
 
 ### `run`
 
@@ -196,7 +197,7 @@ python3 parallelcmd.py run [options] <command ...> [ ::: <args ...> ]* [ :::: <a
 
 Common options include:
 - init side: `--append`, `-f/--force`, `--check_dup`, `--zip`
-- exec side: `-j/--nworkers`, `--id`, `--progress`, `--bar`, `--eta`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--check_timeleft`, `--wait`, `--timeout`, `--retries`, `--halt`, `--output-dir`, `--quiet`, `--tag`
+- exec side: `-j/--nworkers`, `--id`, `--progress`, `--bar`, `--eta`, `--dashboard`, `--dryrun`, `--randomorder`, `--prefix`, `--max_jobs`, `--delay`, `--wait`, `--timeout`, `--retries`, `--halt`, `--output-dir`, `--quiet`, `--tag`, `--hook`
 
 ### `check`
 
@@ -263,6 +264,65 @@ Options:
 - `-y, --yes` skip confirmation prompt
 
 Prompts for confirmation before updating rows (skipped with `-y`).
+
+> **Note:** if the replacement text starts with `--`, use the `=` form to prevent argparse from treating it as a flag:
+> ```bash
+> python3 parallelcmd.py update --replace='--old-flag,--new-flag'
+> ```
+
+### `diagnose`
+
+Inspect the health of the SQLite database — useful when jobs appear stuck or the DB seems unresponsive.
+
+```bash
+python3 parallelcmd.py diagnose [--stale SECONDS]
+```
+
+Reports:
+1. Job counts by state (pending / running / success / failed / error)
+2. In-progress jobs (`Exitval = -1000`) with age in seconds; flags any older than `--stale` (default: `3600`) as potentially stale
+3. DB file sizes (`.sqlite`, `.sqlite-wal`, `.sqlite-shm`); warns if WAL exceeds 10 MB
+4. Exclusive lock probe — attempts `BEGIN EXCLUSIVE` with a 2-second timeout
+5. Open file handles via `lsof`
+
+To recover stale in-progress jobs after a crash:
+
+```bash
+python3 parallelcmd.py reset --where "Exitval = -1000" -y
+```
+
+## Hooks
+
+`--hook <file>` loads a Python file that can inspect each job before and/or after it runs. Define either or both functions:
+
+```python
+def on_before_task(taskid, cmd):
+    # called after --delay sleep, before the subprocess launches
+    # return False → requeue this job to pending and stop this worker
+    return True
+
+def on_after_task(taskid, cmd, exitval, runtime):
+    # called after the exit value is written to the DB
+    # return False → stop this worker (other workers keep running)
+    return True
+```
+
+- Either function can be omitted — only the defined ones are called.
+- Exceptions inside a hook are logged and treated as `True` (continue).
+- Returning `False` stops only the calling worker; other workers are unaffected.
+
+Example hook files are in the `hooks/` directory:
+
+| File | Purpose |
+|---|---|
+| `hooks/my_slurm_hook.py` | Stop workers when SLURM remaining time drops below 1 hour |
+| `hooks/my_pbs_hook.py` | Same for PBS/Torque (`qstat`) |
+
+```bash
+python3 parallelcmd.py exec -j 4 --hook=hooks/my_slurm_hook.py
+```
+
+Edit `CHECK_TIMELEFT` at the top of the hook file to adjust the threshold.
 
 ## Global options
 
@@ -408,9 +468,9 @@ pcj16() { parallelcmd.py run -j 16 "$@"; }
 	- Commands are executed through `bash -c`.
 	- Wrap complex commands in quotes and test one command manually before `init`.
 
-- **`--check_timeleft` fails with missing `SLURM_JOB_ID`**
-	- This option requires a SLURM job environment.
-	- Run inside a SLURM allocation or omit `--check_timeleft`.
+- **Stop workers based on SLURM/PBS remaining time**
+	- Use `--hook=hooks/my_slurm_hook.py` (or `my_pbs_hook.py`).
+	- Must be run inside an allocation where `SLURM_JOB_ID` / `PBS_JOBID` is set.
 
 - **Some jobs have exit code `124`**
 	- These jobs were killed by `--timeout`.
@@ -448,7 +508,7 @@ pcj16() { parallelcmd.py run -j 16 "$@"; }
 | **Workers** | `-j N` | `-j N` |
 | **Load-based throttle** | `--load`, `--noswap`, `--memfree` | — |
 | **Nice/priority** | `--nice` | — |
-| **Startup delay** | `--delay SEC` | — |
+| **Startup delay** | `--delay SEC` | `--delay SEC` |
 | **Progress bar** | `--progress`, `--eta`, `--bar` | `--progress`, `--bar`, `--eta`, `--dashboard` |
 | **Job log** | `--joblog FILE` | SQLite DB (always persisted) |
 | **Resume incomplete batch** | `--resume` (via joblog) | re-run `exec` (auto, SQLite state) |
@@ -469,7 +529,8 @@ pcj16() { parallelcmd.py run -j 16 "$@"; }
 | **Random order** | `--shuf` | `--randomorder` |
 | **Interactive confirm** | `--interactive` | — |
 | **Command prefix** | `--` (shell) | `--prefix CMD` |
-| **SLURM integration** | — | `--check_timeleft SEC` |
+| **SLURM/PBS time-limit hook** | — | `--hook FILE` (`hooks/my_slurm_hook.py`) |
+| **Before/after job hooks** | — | `--hook FILE` (`on_before_task`, `on_after_task`) |
 | **Remote execution** | `--sshlogin`, `--slf`, `--trc` | — |
 | **Distributed file sync** | `--transfer`, `--return`, `--cleanup` | — |
 | **Pipe/streaming mode** | `--pipe`, `--block`, `--pipepart` | — |

@@ -107,14 +107,15 @@ def execute(
     randomorder=False,
     prefix=None,
     max_jobs=None,
-    check_timeleft=None,
     wait_interval=None,
     id_list=None,
     timeout=None,
     retries=0,
     halt=None,
     output_dir=None,
-    delay=10,
+    delay=0,
+    hook_before=None,
+    hook_after=None,
 ):
     ## check in
     hostname = socket.gethostname()
@@ -132,28 +133,6 @@ def execute(
         if halt_flag.value:
             log(f"{slot[workerid]}: Halt flag set. Stopping.")
             break
-
-        if check_timeleft is not None and check_timeleft > 0:
-            jobid = os.getenv("SLURM_JOB_ID", None)
-            assert jobid is not None, "SLURM_JOB_ID not found in environment variables."
-            cmd = f"squeue -h -j {jobid} -o %L"
-            proc = subprocess.run(cmd.split(), stdout=subprocess.PIPE)
-            timestr = proc.stdout.decode("utf-8").strip()
-            try:
-                left = timedelta_parse(timestr).total_seconds()
-            except Exception as e:
-                ## "INVALID" when remaining time is less than a few seconds
-                log(f"{slot[workerid]}: Exception parsing time string '{timestr}':", e)
-                left = 0.0
-            log(
-                f"{slot[workerid]}: SLURM job {jobid} remaining time: {left:.2f} seconds"
-            )
-
-            if left < check_timeleft:
-                log(
-                    f"{slot[workerid]}: Remaining time {left:.2f} seconds is less than threshold {check_timeleft}. Stop fetching new jobs."
-                )
-                break
 
         with sqlite3.connect(dbfile) as con:
             while True:
@@ -203,6 +182,24 @@ def execute(
 
         if delay is not None and delay > 0:
             time.sleep(delay)
+
+        if hook_before is not None:
+            try:
+                if not hook_before(taskid, cmd):
+                    info(
+                        "%d: on_before_task returned stop. Requeueing job. Worker %d exiting."
+                        % (taskid, slot[workerid])
+                    )
+                    with sqlite3.connect(dbfile) as con:
+                        execute_sql_with_retry(
+                            con,
+                            "UPDATE parjob SET Starttime = NULL, Exitval = NULL WHERE Seq = ?;",
+                            (taskid,),
+                        )
+                        con.commit()
+                    break
+            except Exception as e:
+                log("%d: on_before_task exception (continuing): %s" % (taskid, e))
 
         full_cmd = cmd.replace("{%}", str(slot[workerid])).replace("{#}", str(taskid))
         if prefix is not None:
@@ -304,7 +301,10 @@ def execute(
                     if verbose:
                         log("%d: Done: %s" % (taskid, exitval))
                     break
-                info("%d: Failed (exit %d), retry %d/%d" % (taskid, exitval, attempt + 1, retries))
+                info(
+                    "%d: Failed (exit %d), retry %d/%d"
+                    % (taskid, exitval, attempt + 1, retries)
+                )
 
             runtime = time.time() - starttime
 
@@ -319,9 +319,23 @@ def execute(
                 with fail_count.get_lock():
                     fail_count.value += 1
                     if fail_count.value >= halt:
-                        info("Halt: %d failure(s) reached threshold %d." % (fail_count.value, halt))
+                        info(
+                            "Halt: %d failure(s) reached threshold %d."
+                            % (fail_count.value, halt)
+                        )
                         with halt_flag.get_lock():
                             halt_flag.value = 1
+
+            if hook_after is not None:
+                try:
+                    if not hook_after(taskid, cmd, exitval, runtime):
+                        info(
+                            "%d: on_after_task returned stop. Worker %d exiting."
+                            % (taskid, slot[workerid])
+                        )
+                        break
+                except Exception as e:
+                    log("%d: on_after_task exception (continuing): %s" % (taskid, e))
 
             finished += 1
 
@@ -389,7 +403,17 @@ def cmdlist(argv):
     return cmds
 
 
-def progress(done, total, dashboard=False, progress=False, timeskip=0.0, eta=False, bar=False, quiet=False, tag=False):
+def progress(
+    done,
+    total,
+    dashboard=False,
+    progress=False,
+    timeskip=0.0,
+    eta=False,
+    bar=False,
+    quiet=False,
+    tag=False,
+):
     def putline():
         elapsed = time.time() - t0
         if bar:
@@ -397,7 +421,14 @@ def progress(done, total, dashboard=False, progress=False, timeskip=0.0, eta=Fal
             filled = int(bar_width * done / total) if total > 0 else 0
             arrow = ("=" * (filled - 1) + ">") if filled > 0 else ""
             spaces = " " * (bar_width - filled)
-            line = "[%s%s] %d/%d %.1f%%  %.2fs" % (arrow, spaces, done, total, float(done) / total * 100, elapsed)
+            line = "[%s%s] %d/%d %.1f%%  %.2fs" % (
+                arrow,
+                spaces,
+                done,
+                total,
+                float(done) / total * 100,
+                elapsed,
+            )
         else:
             line = (
                 "Processing/Done/Total/Completed(%%)/Time(sec): %d/%d/%d/%.01f%%/%.02fs"
@@ -676,8 +707,12 @@ def diagnosedb(args):
             print_table(cur, rows, row_format)
             stale = [r for r in rows if r[1] is not None and r[1] > stale_threshold]
             if stale:
-                print(f"\n  WARNING: {len(stale)} job(s) running > {stale_threshold}s — possibly stale (worker died).")
-                print(f"  Reset with: parallelcmd.py reset --where \"Exitval = -1000\" -y")
+                print(
+                    f"\n  WARNING: {len(stale)} job(s) running > {stale_threshold}s — possibly stale (worker died)."
+                )
+                print(
+                    f'  Reset with: parallelcmd.py reset --where "Exitval = -1000" -y'
+                )
     except sqlite3.OperationalError as e:
         print(f"  Could not query in-progress jobs: {e}")
 
@@ -716,7 +751,9 @@ def diagnosedb(args):
         )
         our_pid = str(os.getpid())
         lines = result.stdout.splitlines()
-        filtered = [l for l in lines if not (len(l.split()) > 1 and l.split()[1] == our_pid)]
+        filtered = [
+            l for l in lines if not (len(l.split()) > 1 and l.split()[1] == our_pid)
+        ]
         output = "\n".join(filtered).strip()
         if output:
             print(output)
@@ -797,6 +834,24 @@ def initdb(args):
 
 
 def exec(args):
+    hook_before_fn = None
+    hook_after_fn = None
+    if args.hook is not None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("_hook", args.hook)
+        if spec is None:
+            raise SystemExit("--hook: cannot load file: %s" % args.hook)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        hook_before_fn = getattr(mod, "on_before_task", None)
+        hook_after_fn = getattr(mod, "on_after_task", None)
+        if hook_before_fn is None and hook_after_fn is None:
+            raise SystemExit(
+                "--hook: file %s must define on_before_task and/or on_after_task"
+                % args.hook
+            )
+
     total, done = jobcount()
 
     if args.dashboard:
@@ -836,7 +891,6 @@ def exec(args):
                 randomorder=args.randomorder,
                 prefix=args.prefix,
                 max_jobs=args.max_jobs,
-                check_timeleft=args.check_timeleft,
                 wait_interval=args.wait,
                 id_list=args.id if args.id is not None else None,
                 timeout=args.timeout,
@@ -844,6 +898,8 @@ def exec(args):
                 halt=args.halt,
                 output_dir=args.output_dir,
                 delay=args.delay,
+                hook_before=hook_before_fn,
+                hook_after=hook_after_fn,
             )
             future_list.append(future)
 
@@ -918,7 +974,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--nonzero", action="store_true", help="show only nonzero return tasks"
     )
-    parser.add_argument("--running", action="store_true", help="show only currently running tasks")
+    parser.add_argument(
+        "--running", action="store_true", help="show only currently running tasks"
+    )
     parser.add_argument("--where", metavar="EXPR", help="where statement")
     parser.add_argument("--like", metavar="PATTERN", help="like statement")
     parser.add_argument("--id", type=int, metavar="ID", help="select by id", nargs="+")
@@ -933,7 +991,9 @@ if __name__ == "__main__":
         "--nonzero", action="store_true", help="reset only nonzero return tasks"
     )
     parser.add_argument("--id", type=int, metavar="ID", help="reset by id", nargs="+")
-    parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
+    parser.add_argument(
+        "-y", "--yes", action="store_true", help="skip confirmation prompt"
+    )
     parser.set_defaults(func=resetdb)
 
     ## subcommand: delete
@@ -941,7 +1001,9 @@ if __name__ == "__main__":
     parser.add_argument("--like", metavar="PATTERN", help="like statement")
     parser.add_argument("-a", "--all", action="store_true", help="delete all")
     parser.add_argument("--id", type=int, metavar="ID", help="remove by id", nargs="+")
-    parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
+    parser.add_argument(
+        "-y", "--yes", action="store_true", help="skip confirmation prompt"
+    )
     parser.set_defaults(func=deletedb)
 
     ## subcommand: init
@@ -957,7 +1019,9 @@ if __name__ == "__main__":
         "--check_dup", action="store_true", help="allow duplicate commands"
     )
     parser.add_argument(
-        "--zip", action="store_true", help="pair argument lists element-by-element instead of Cartesian product"
+        "--zip",
+        action="store_true",
+        help="pair argument lists element-by-element instead of Cartesian product",
     )
 
     ## subcommand: exec
@@ -970,8 +1034,14 @@ if __name__ == "__main__":
         "-j", "--nworkers", type=int, metavar="N", help="Number of workers", default=4
     )
     parser.add_argument("--progress", action="store_true", help="print progress")
-    parser.add_argument("--eta", action="store_true", help="append ETA to the progress line (requires --progress or --bar)")
-    parser.add_argument("--bar", action="store_true", help="show a visual ASCII progress bar")
+    parser.add_argument(
+        "--eta",
+        action="store_true",
+        help="append ETA to the progress line (requires --progress or --bar)",
+    )
+    parser.add_argument(
+        "--bar", action="store_true", help="show a visual ASCII progress bar"
+    )
     parser.add_argument("--dashboard", action="store_true", help="print only last line")
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose")
@@ -986,12 +1056,7 @@ if __name__ == "__main__":
         metavar="N",
         help="maximum number of jobs per process to run",
     )
-    parser.add_argument(
-        "--check_timeleft",
-        type=float,
-        metavar="SECONDS",
-        help="check timeleft (seconds)",
-    )
+
     parser.add_argument(
         "--wait",
         type=float,
@@ -1027,9 +1092,29 @@ if __name__ == "__main__":
         dest="output_dir",
         help="save each job's stdout to DIR/<seq>.out",
     )
-    parser.add_argument("--quiet", action="store_true", help="suppress per-job output (show only progress/bar)")
-    parser.add_argument("--tag", action="store_true", help="prefix each output line with the full command instead of seq ID")
-    parser.add_argument("--delay", type=float, default=10, metavar="SECONDS", help="sleep SECONDS before starting each job (default: 10)")
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="suppress per-job output (show only progress/bar)",
+    )
+    parser.add_argument(
+        "--tag",
+        action="store_true",
+        help="prefix each output line with the full command instead of seq ID",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0,
+        metavar="SECONDS",
+        help="sleep SECONDS before starting each job (default: 0)",
+    )
+    parser.add_argument(
+        "--hook",
+        metavar="FILE",
+        default=None,
+        help="Python file defining on_before_task(taskid, cmd) and/or on_after_task(taskid, cmd, exitval, runtime); return False to stop this worker",
+    )
 
     ## subcommand: run (init + exec)
     parser = subparsers.add_parser("run")
@@ -1047,14 +1132,22 @@ if __name__ == "__main__":
         "--check_dup", action="store_true", help="allow duplicate commands"
     )
     parser.add_argument(
-        "--zip", action="store_true", help="pair argument lists element-by-element instead of Cartesian product"
+        "--zip",
+        action="store_true",
+        help="pair argument lists element-by-element instead of Cartesian product",
     )
     parser.add_argument(
         "-j", "--nworkers", type=int, metavar="N", help="Number of workers", default=4
     )
     parser.add_argument("--progress", action="store_true", help="print progress")
-    parser.add_argument("--eta", action="store_true", help="append ETA to the progress line (requires --progress or --bar)")
-    parser.add_argument("--bar", action="store_true", help="show a visual ASCII progress bar")
+    parser.add_argument(
+        "--eta",
+        action="store_true",
+        help="append ETA to the progress line (requires --progress or --bar)",
+    )
+    parser.add_argument(
+        "--bar", action="store_true", help="show a visual ASCII progress bar"
+    )
     parser.add_argument("--dashboard", action="store_true", help="print only last line")
     parser.add_argument("--dryrun", action="store_true", help="dryrun")
     parser.add_argument(
@@ -1068,12 +1161,7 @@ if __name__ == "__main__":
         metavar="N",
         help="maximum number of jobs per process to run",
     )
-    parser.add_argument(
-        "--check_timeleft",
-        type=float,
-        metavar="SECONDS",
-        help="check timeleft (seconds)",
-    )
+
     parser.add_argument(
         "--wait",
         type=float,
@@ -1109,9 +1197,29 @@ if __name__ == "__main__":
         dest="output_dir",
         help="save each job's stdout to DIR/<seq>.out",
     )
-    parser.add_argument("--quiet", action="store_true", help="suppress per-job output (show only progress/bar)")
-    parser.add_argument("--tag", action="store_true", help="prefix each output line with the full command instead of seq ID")
-    parser.add_argument("--delay", type=float, default=10, metavar="SECONDS", help="sleep SECONDS before starting each job (default: 10)")
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="suppress per-job output (show only progress/bar)",
+    )
+    parser.add_argument(
+        "--tag",
+        action="store_true",
+        help="prefix each output line with the full command instead of seq ID",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0,
+        metavar="SECONDS",
+        help="sleep SECONDS before starting each job (default: 0)",
+    )
+    parser.add_argument(
+        "--hook",
+        metavar="FILE",
+        default=None,
+        help="Python file defining on_before_task(taskid, cmd) and/or on_after_task(taskid, cmd, exitval, runtime); return False to stop this worker",
+    )
 
     ## subcommand: update
     parser = subparsers.add_parser("update")
@@ -1123,7 +1231,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("--like", metavar="PATTERN", help="like statement")
     parser.add_argument("--id", type=int, metavar="ID", help="reset by id", nargs="+")
-    parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
+    parser.add_argument(
+        "-y", "--yes", action="store_true", help="skip confirmation prompt"
+    )
     parser.set_defaults(func=updatedb)
 
     ## subcommand: diagnose
